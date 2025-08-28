@@ -8,11 +8,14 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
-PID_FILE = Path("/tmp/cbsync.pid")
-LOG_FILE = Path("/tmp/cbsync.log")
+# Use platform-appropriate temp directory
+TEMP_DIR = Path(tempfile.gettempdir())
+PID_FILE = TEMP_DIR / "cbsync.pid"
+LOG_FILE = TEMP_DIR / "cbsync.log"
 
 
 def get_pid() -> int | None:
