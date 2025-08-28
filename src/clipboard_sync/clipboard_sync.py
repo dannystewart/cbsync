@@ -511,12 +511,12 @@ def get_current_ip() -> str | None:
 def get_local_network_prefix() -> str | None:
     """Get the local network prefix for discovery."""
     if not (interfaces := _get_all_interfaces()):
-        logger.warning("Could not determine local IP address")
+        logger.warning("Could not determine local IP address.")
         return None
 
     preferred_ip = _get_preferred_interface(interfaces)
     if not preferred_ip:
-        logger.warning("No valid network interface found")
+        logger.warning("No valid network interface found.")
         return None
 
     logger.info("Using network interface: %s", preferred_ip)
@@ -537,29 +537,8 @@ def _check_host_for_clipboard_sync(ip: str, port: int, timeout: float, peers: li
         pass  # Host not reachable or not running clipboard sync
 
 
-def discover_peers(port: int, timeout: float = 2.0, interface_ip: str | None = None) -> list[str]:
-    """Discover other clipboard sync instances on the network."""
-    peers = []
-
-    network_prefix: str | None = None
-
-    if interface_ip:  # Use manually specified interface
-        network_parts = interface_ip.split(".")
-        if len(network_parts) == 4:
-            network_prefix = ".".join(network_parts[:3]) + "."
-            logger.info("Using specified network interface: %s", interface_ip)
-        else:
-            logger.error("Invalid interface IP format: %s", interface_ip)
-            return peers
-    elif not (network_prefix := get_local_network_prefix()):
-        return peers
-
-    if not network_prefix:
-        return peers
-
-    logger.info("Scanning network %s* for clipboard sync instances...", network_prefix)
-
-    # Check common local network ranges
+def _scan_network_range(network_prefix: str, port: int, timeout: float, peers: list[str]) -> None:
+    """Scan a network range for clipboard sync instances."""
     threads = []
     for i in range(1, 255):
         ip = f"{network_prefix}{i}"
@@ -578,6 +557,43 @@ def discover_peers(port: int, timeout: float = 2.0, interface_ip: str | None = N
     # Wait for remaining threads
     for thread in threads:
         thread.join(timeout=0.1)
+
+
+def _get_network_prefix(interface_ip: str | None) -> str | None:
+    """Get network prefix from interface IP or auto-detect."""
+    if interface_ip:  # Use manually specified interface
+        network_parts = interface_ip.split(".")
+        if len(network_parts) == 4:
+            network_prefix = ".".join(network_parts[:3]) + "."
+            logger.info("Using specified network interface: %s", interface_ip)
+            return network_prefix
+        logger.error("Invalid interface IP format: %s", interface_ip)
+        return None
+
+    return get_local_network_prefix()
+
+
+def discover_peers(port: int, timeout: float = 2.0, interface_ip: str | None = None) -> list[str]:
+    """Discover other clipboard sync instances on the network."""
+    peers = []
+
+    if not (network_prefix := _get_network_prefix(interface_ip)):
+        return peers
+
+    logger.info("Scanning network %s* for clipboard sync instances...", network_prefix)
+
+    for attempt in range(10):  # Try multiple times to account for timing issues
+        if attempt > 0:
+            logger.debug("Retry attempt %d of 10...", attempt + 1)
+            time.sleep(1)
+
+        _scan_network_range(network_prefix, port, timeout, peers)
+
+        if peers:  # If we found peers, we can stop early
+            break
+
+    if not peers:
+        logger.info("No peers found after 10 attempts.")
 
     return peers
 
