@@ -247,8 +247,8 @@ class ClipboardMonitor:
                 if clipboard_data and clipboard_data.hash != self.last_clipboard_hash:
                     with self.update_lock:  # Double-check after acquiring lock
                         if clipboard_data.hash != self.last_clipboard_hash:
-                            logger.info(
-                                "Clipboard changed: %s (%s bytes).",
+                            logger.debug(
+                                "Local clipboard changed: %s (%s bytes).",
                                 clipboard_data.data_type,
                                 clipboard_data.size,
                             )
@@ -308,7 +308,8 @@ class ClipboardServer:
                         self._set_clipboard(clipboard_data)
                         self.last_received_hash = clipboard_data.hash
                         logger.info(
-                            "Updated clipboard: %s (%s bytes).",
+                            "Clipboard updated from %s: %s (%s bytes).",
+                            request.remote_addr,
                             clipboard_data.data_type,
                             clipboard_data.size,
                         )
@@ -323,7 +324,10 @@ class ClipboardServer:
 
         @self.app.route("/health", methods=["GET"])
         def health_check() -> tuple[Response, int]:  # type: ignore[reportUnusedFunction]
-            return jsonify({"status": "healthy", "platform": platform.system()}), 200
+            reported_platform = platform.system()
+            if reported_platform == "Darwin":
+                reported_platform = "macOS"
+            return jsonify({"status": "healthy", "platform": reported_platform}), 200
 
         @self.app.route("/discover", methods=["GET"])
         def discover() -> tuple[Response, int]:  # type: ignore[reportUnusedFunction]
@@ -563,7 +567,10 @@ def main():
         monitor.start()
 
     logger.info("Clipboard sync is running. Press Ctrl+C to stop.")
-    logger.info("Platform: %s", platform.system())
+    reported_platform = platform.system()
+    if reported_platform == "Darwin":
+        reported_platform = "macOS"
+    logger.info("Platform: %s", reported_platform)
     logger.info("Server port: %s", args.port)
     if args.peers:
         logger.info("Peers: %s", ", ".join(args.peers))
