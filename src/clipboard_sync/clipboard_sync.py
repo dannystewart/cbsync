@@ -2,24 +2,31 @@
 
 """Cross-platform clipboard synchronization application.
 
-This application shares clipboard contents (text and images) between devices on the same network.
-It runs a server to receive updates and a client to send updates when the local clipboard changes.
+This application shares clipboard contents (text, images, and files) between devices on the same
+network. It runs a server to receive updates and a client to send updates when the local clipboard
+changes.
 """
 
 from __future__ import annotations
 
+import argparse
 import base64
 import hashlib
 import logging
 import platform
+import socket
+import subprocess
+import tempfile
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import pyperclip
 import requests
 from flask import Flask, Response, jsonify, request
 from polykit import PolyLog
+from polykit.cli import handle_interrupt
 
 logger = PolyLog.get_logger()
 
@@ -27,10 +34,17 @@ logger = PolyLog.get_logger()
 class ClipboardData:
     """Represents clipboard data with type and content."""
 
-    def __init__(self, data_type: str, content: str | bytes, size: int):
+    def __init__(
+        self,
+        data_type: str,
+        content: str | bytes,
+        size: int,
+        metadata: dict[str, Any] | None = None,
+    ):
         self.data_type = data_type
         self.content = content
         self.size = size
+        self.metadata = metadata or {}
         self.timestamp = time.time()
         self.hash = self._calculate_hash()
 
@@ -46,13 +60,14 @@ class ClipboardData:
         """Convert to dictionary for JSON serialization."""
         if self.data_type == "text":
             content = self.content
-        else:  # image
+        else:  # image or file
             content = base64.b64encode(self.content).decode("utf-8")
 
         return {
             "type": self.data_type,
             "content": content,
             "size": self.size,
+            "metadata": self.metadata,
             "timestamp": self.timestamp,
             "hash": self.hash,
         }
@@ -61,10 +76,10 @@ class ClipboardData:
     def from_dict(cls, data: dict[str, Any]) -> ClipboardData:
         """Create ClipboardData from dictionary."""
         content = data["content"]
-        if data["type"] == "image":
+        if data["type"] in {"image", "file"}:
             content = base64.b64decode(content)
 
-        obj = cls(data["type"], content, data["size"])
+        obj = cls(data["type"], content, data["size"], data.get("metadata"))
         obj.timestamp = data["timestamp"]
         obj.hash = data["hash"]
         return obj
@@ -80,28 +95,59 @@ class ClipboardMonitor:
         self.running = False
         self.last_clipboard_hash: str | None = None
         self.update_lock = threading.Lock()
+        self.session = requests.Session()
 
     def get_clipboard_content(self) -> ClipboardData | None:
-        """Get current clipboard content if it's text or image."""
+        """Get current clipboard content if it's text, image, or file."""
         try:
-            # Try to get image first (if available)
             if platform.system() == "Darwin":  # macOS
-                # On macOS, try to get image from clipboard
-                try:
-                    import subprocess
+                return self._get_macos_clipboard()
+            if platform.system() == "Windows":
+                return self._get_windows_clipboard()
+            # Linux
+            return self._get_linux_clipboard()
 
-                    result = subprocess.run(
-                        ["osascript", "-e", "the clipboard as «class PNGf»"],
-                        check=False,
-                        capture_output=True,
-                        text=True,
-                        timeout=5,
+        except Exception as e:
+            logger.error("Error reading clipboard: %s", str(e))
+
+        return None
+
+    def _get_macos_clipboard(self) -> ClipboardData | None:
+        """Get clipboard content on macOS."""
+        try:
+            # Try to get image first
+            result = subprocess.run(
+                ["osascript", "-e", "the clipboard as «class PNGf»"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                # We have image data, let's save it to a temp file and read it
+                try:
+                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                        tmp_path = tmp_file.name
+
+                    # Save clipboard image to temp file
+                    subprocess.run(
+                        ["osascript", "-e", "set the clipboard to (the clipboard as «class PNGf»)"],
+                        check=True,
                     )
-                    if result.returncode == 0 and result.stdout.strip():
-                        # We have image data, but for simplicity, we'll focus on text
-                        pass
-                except Exception:
-                    pass
+
+                    # Read the image file
+                    with Path(tmp_path).open("rb") as f:
+                        image_data = f.read()
+
+                    # Clean up temp file
+                    Path(tmp_path).unlink()
+
+                    if len(image_data) <= self.max_size_bytes:
+                        return ClipboardData("image", image_data, len(image_data))
+                    logger.warning("Clipboard image too large: %s bytes.", len(image_data))
+
+                except Exception as img_e:
+                    logger.debug("Failed to read image from clipboard: %s", str(img_e))
 
             # Get text content
             text_content = pyperclip.paste()
@@ -112,7 +158,64 @@ class ClipboardMonitor:
                 logger.warning("Clipboard text too large: %s bytes.", len(content_bytes))
 
         except Exception as e:
-            logger.error("Error reading clipboard: %s", str(e))
+            logger.error("Error reading macOS clipboard: %s", str(e))
+
+        return None
+
+    def _get_windows_clipboard(self) -> ClipboardData | None:
+        """Get clipboard content on Windows."""
+        try:
+            # Try to get image first
+            try:
+                import win32clipboard  # type: ignore
+                import win32con  # type: ignore
+
+                win32clipboard.OpenClipboard()
+
+                # Check if there's an image in the clipboard
+                if win32clipboard.IsClipboardFormatAvailable(win32con.CF_DIB):
+                    # Get the image data
+                    image_data = win32clipboard.GetClipboardData(win32con.CF_DIB)
+                    win32clipboard.CloseClipboard()
+
+                    if len(image_data) <= self.max_size_bytes:
+                        return ClipboardData("image", image_data, len(image_data))
+                    logger.warning("Clipboard image too large: %s bytes.", len(image_data))
+                    return None
+
+                win32clipboard.CloseClipboard()
+
+            except ImportError:
+                logger.debug("win32clipboard not available, skipping image support")
+            except Exception as img_e:
+                logger.debug("Failed to read image from Windows clipboard: %s", str(img_e))
+
+            # Get text content
+            text_content = pyperclip.paste()
+            if text_content:
+                content_bytes = text_content.encode("utf-8")
+                if len(content_bytes) <= self.max_size_bytes:
+                    return ClipboardData("text", text_content, len(content_bytes))
+                logger.warning("Clipboard text too large: %s bytes.", len(content_bytes))
+
+        except Exception as e:
+            logger.error("Error reading Windows clipboard: %s", str(e))
+
+        return None
+
+    def _get_linux_clipboard(self) -> ClipboardData | None:
+        """Get clipboard content on Linux."""
+        try:
+            # Try to get text content
+            text_content = pyperclip.paste()
+            if text_content:
+                content_bytes = text_content.encode("utf-8")
+                if len(content_bytes) <= self.max_size_bytes:
+                    return ClipboardData("text", text_content, len(content_bytes))
+                logger.warning("Clipboard text too large: %s bytes.", len(content_bytes))
+
+        except Exception as e:
+            logger.error("Error reading Linux clipboard: %s", str(e))
 
         return None
 
@@ -123,8 +226,8 @@ class ClipboardMonitor:
         for peer in self.peers:
             try:
                 url = f"http://{peer}:{self.server_port}/clipboard"
-                response = requests.post(
-                    url, json=data, timeout=3, headers={"Content-Type": "application/json"}
+                response = self.session.post(
+                    url, json=data, headers={"Content-Type": "application/json"}
                 )
                 if response.status_code == 200:
                     logger.info("Successfully sent clipboard to %s.", peer)
@@ -169,6 +272,9 @@ class ClipboardMonitor:
         """Stop clipboard monitoring."""
         self.running = False
         logger.info("Clipboard monitor stopped.")
+
+
+monitor: ClipboardMonitor | None = None
 
 
 class ClipboardServer:
@@ -219,16 +325,100 @@ class ClipboardServer:
         def health_check() -> tuple[Response, int]:  # type: ignore[reportUnusedFunction]
             return jsonify({"status": "healthy", "platform": platform.system()}), 200
 
+        @self.app.route("/discover", methods=["GET"])
+        def discover() -> tuple[Response, int]:  # type: ignore[reportUnusedFunction]
+            """Endpoint for network discovery."""
+            return jsonify({
+                "status": "available",
+                "platform": platform.system(),
+                "hostname": socket.gethostname(),
+                "port": self.port,
+            }), 200
+
     def _set_clipboard(self, clipboard_data: ClipboardData) -> None:
         """Set the local clipboard content."""
         try:
             if clipboard_data.data_type == "text":
                 pyperclip.copy(clipboard_data.content)
-            else:  # TODO: Implement image support
-                logger.info("Received image data (image clipboard not implemented)")
+            elif clipboard_data.data_type == "image":
+                self._set_image_clipboard(clipboard_data)
+            elif clipboard_data.data_type == "file":
+                self._set_file_clipboard(clipboard_data)
+            else:
+                logger.warning("Unknown clipboard type: %s", clipboard_data.data_type)
 
         except Exception as e:
             logger.error("Error setting clipboard: %s", str(e))
+
+    def _set_image_clipboard(self, clipboard_data: ClipboardData) -> None:
+        """Set image clipboard content."""
+        if platform.system() == "Darwin":  # macOS
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                    if isinstance(clipboard_data.content, str):
+                        tmp_file.write(clipboard_data.content.encode("utf-8"))
+                    else:
+                        tmp_file.write(clipboard_data.content)
+                    tmp_path = tmp_file.name
+
+                subprocess.run(
+                    [
+                        "osascript",
+                        "-e",
+                        f'set the clipboard to (read (POSIX file "{tmp_path}") as «class PNGf»)',
+                    ],
+                    check=True,
+                )
+
+                # Clean up temp file
+                Path(tmp_path).unlink()
+                logger.info("Image set to clipboard on macOS")
+
+            except Exception as e:
+                logger.error("Error setting image clipboard on macOS: %s", str(e))
+
+        elif platform.system() == "Windows":  # Windows
+            try:
+                import win32clipboard  # type: ignore
+                import win32con  # type: ignore
+
+                win32clipboard.OpenClipboard()
+                win32clipboard.EmptyClipboard()
+
+                # Set the image data to clipboard
+                win32clipboard.SetClipboardData(win32con.CF_DIB, clipboard_data.content)
+                win32clipboard.CloseClipboard()
+
+                logger.info("Image set to clipboard on Windows")
+
+            except ImportError:
+                logger.warning(
+                    "win32clipboard not available, cannot set image clipboard on Windows"
+                )
+            except Exception as e:
+                logger.error("Error setting image clipboard on Windows: %s", str(e))
+        else:
+            logger.info("Image clipboard not implemented for this platform")
+
+    def _set_file_clipboard(self, clipboard_data: ClipboardData) -> None:
+        """Set file clipboard content."""
+        try:
+            # For now, just save the file to a temp location
+            filename = clipboard_data.metadata.get("filename", "clipboard_file")
+            temp_dir = Path(tempfile.gettempdir()) / "clipboard_sync"
+            temp_dir.mkdir(exist_ok=True)
+
+            file_path = temp_dir / filename
+            with file_path.open("wb") as f:
+                if isinstance(clipboard_data.content, str):
+                    f.write(clipboard_data.content.encode("utf-8"))
+                else:
+                    f.write(clipboard_data.content)
+
+            logger.info("File saved to: %s", file_path)
+
+        except Exception as e:
+            logger.error("Error handling file clipboard: %s", str(e))
 
     def run(self) -> None:
         """Start the Flask server."""
@@ -236,27 +426,127 @@ class ClipboardServer:
         self.app.run(host="0.0.0.0", port=self.port, debug=False, threaded=True)
 
 
+def get_local_network_prefix() -> str | None:
+    """Get the local network prefix for discovery."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+    except Exception:
+        logger.warning("Could not determine local IP address")
+        return None
+
+    network_parts = local_ip.split(".")
+    if len(network_parts) != 4:
+        return None
+
+    return ".".join(network_parts[:3]) + "."
+
+
+def _check_host_for_clipboard_sync(ip: str, port: int, timeout: float, peers: list[str]) -> None:
+    """Check if a specific IP is running clipboard sync."""
+    try:
+        response = requests.get(f"http://{ip}:{port}/discover", timeout=timeout)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("status") == "available":
+                peers.append(ip)
+                logger.info("Found peer: %s (%s)", ip, data.get("hostname", "unknown"))
+    except Exception:
+        pass  # Host not reachable or not running clipboard sync
+
+
+def discover_peers(port: int, timeout: float = 2.0) -> list[str]:
+    """Discover other clipboard sync instances on the network."""
+    peers = []
+
+    network_prefix = get_local_network_prefix()
+    if not network_prefix:
+        return peers
+
+    logger.info("Scanning network %s* for clipboard sync instances...", network_prefix)
+
+    # Check common local network ranges
+    threads = []
+    for i in range(1, 255):
+        ip = f"{network_prefix}{i}"
+        thread = threading.Thread(
+            target=_check_host_for_clipboard_sync, args=(ip, port, timeout, peers), daemon=True
+        )
+        threads.append(thread)
+        thread.start()
+
+        # Limit concurrent threads
+        if len(threads) >= 50:
+            for t in threads:
+                t.join(timeout=0.1)
+            threads = []
+
+    # Wait for remaining threads
+    for thread in threads:
+        thread.join(timeout=0.1)
+
+    return peers
+
+
+def shutdown() -> None:
+    """Shutdown the application."""
+    logger.info("Shutting down...")
+    if monitor:
+        monitor.stop()
+
+
+@handle_interrupt(callback=shutdown)
 def main():
     """Main application entry point."""
-    import argparse
-
     parser = argparse.ArgumentParser(description="Cross-platform clipboard sync")
     parser.add_argument(
-        "--port", type=int, default=8765, help="Port for the clipboard server (default: 8765)"
+        "--port",
+        type=int,
+        default=8765,
+        help="Port for the clipboard server (default: 8765)",
     )
-    parser.add_argument("--peers", nargs="*", default=[], help="IP addresses of peer devices")
     parser.add_argument(
-        "--max-size", type=int, default=10, help="Maximum clipboard size in MB (default: 10)"
+        "--peers",
+        nargs="*",
+        default=[],
+        help="IP addresses of peer devices",
     )
     parser.add_argument(
-        "--server-only", action="store_true", help="Run as server only (no clipboard monitoring)"
+        "--max-size",
+        type=int,
+        default=10,
+        help="Maximum clipboard size in MB (default: 10)",
+    )
+    parser.add_argument(
+        "--server-only",
+        action="store_true",
+        help="Run as server only (no clipboard monitoring)",
+    )
+    parser.add_argument(
+        "--discover",
+        action="store_true",
+        help="Automatically discover peers on the network",
     )
 
     args = parser.parse_args()
 
+    # Auto-discover peers if requested
+    if args.discover and not args.peers:
+        logger.info("Discovering peers on the network...")
+        discovered_peers = discover_peers(args.port)
+        if discovered_peers:
+            args.peers = discovered_peers
+            logger.info("Using discovered peers: %s", ", ".join(discovered_peers))
+        else:
+            logger.warning("No peers discovered. You may need to specify peers manually.")
+
     if not args.peers and not args.server_only:
-        logger.error("Please specify peer IP addresses with --peers or use --server-only.")
+        logger.error(
+            "Please specify peer IP addresses with --peers, use --discover, or use --server-only."
+        )
         logger.error("Example: python clipboard_sync.py --peers 192.168.1.100 192.168.1.101")
+        logger.error("Example: python clipboard_sync.py --discover")
         return
 
     # Start the server in a background thread
@@ -268,26 +558,19 @@ def main():
     time.sleep(1)
 
     # Start clipboard monitoring if not server-only mode
-    monitor = None
     if not args.server_only and args.peers:
         monitor = ClipboardMonitor(args.port, args.peers, args.max_size)
         monitor.start()
 
-    try:
-        logger.info("Clipboard sync is running. Press Ctrl+C to stop.")
-        logger.info("Platform: %s", platform.system())
-        logger.info("Server port: %s", args.port)
-        if args.peers:
-            logger.info("Peers: %s", ", ".join(args.peers))
+    logger.info("Clipboard sync is running. Press Ctrl+C to stop.")
+    logger.info("Platform: %s", platform.system())
+    logger.info("Server port: %s", args.port)
+    if args.peers:
+        logger.info("Peers: %s", ", ".join(args.peers))
 
-        # Keep the main thread alive
-        while True:
-            time.sleep(1)
-
-    except KeyboardInterrupt:
-        logger.info("Shutting down...")
-        if monitor:
-            monitor.stop()
+    # Keep the main thread alive
+    while True:
+        time.sleep(1)
 
 
 if __name__ == "__main__":

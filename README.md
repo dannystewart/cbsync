@@ -1,12 +1,15 @@
 # Cross-Platform Clipboard Sync
 
-A simple Python application that synchronizes clipboard contents (text and images) between devices on the same network.
+A simple Python application that synchronizes clipboard contents (text, images, and files) between devices on the same network.
 
 ## Features
 
 - **Real-time sync**: Automatically detects clipboard changes and syncs them
 - **Cross-platform**: Works on Windows, macOS, and Linux
 - **Text support**: Syncs text clipboard content
+- **Image support**: Syncs image clipboard content (macOS and Windows only)
+- **File support**: Handles file drops and saves them to a temp directory
+- **Network discovery**: Automatically find other clipboard sync instances on your network
 - **Size limits**: Configurable maximum clipboard size (default: 10MB)
 - **Network-based**: Uses HTTP for communication between devices
 - **Deduplication**: Prevents infinite loops and duplicate updates
@@ -14,6 +17,8 @@ A simple Python application that synchronizes clipboard contents (text and image
 ## Usage
 
 ### Basic Setup (Two Devices)
+
+#### Option 1: Manual IP Configuration
 
 1. **Find IP addresses**: On each device, find the local IP address
    - Windows: `ipconfig`
@@ -31,12 +36,29 @@ A simple Python application that synchronizes clipboard contents (text and image
    python clipboard_sync.py --peers 192.168.1.100
    ```
 
+#### Option 2: Automatic Network Discovery
+
+1. **Start on Device 1**:
+
+   ```bash
+   python clipboard_sync.py --discover
+   ```
+
+2. **Start on Device 2**:
+
+   ```bash
+   python clipboard_sync.py --discover
+   ```
+
+It will automatically scan your local network and find other clipboard sync instances. Port 8765 (or a custom port) must be accessible between devices. Network discovery will scan the local subnet (e.g., 192.168.1.*).
+
 ### Command Line Options
 
 - `--port`: Port for the server (default: 8765)
 - `--peers`: IP addresses of other devices (space-separated)
 - `--max-size`: Maximum clipboard size in MB (default: 10)
 - `--server-only`: Run as server only (no clipboard monitoring)
+- `--discover`: Automatically discover peers on the network
 
 ### Examples
 
@@ -58,6 +80,12 @@ python clipboard_sync.py --port 9000 --peers 192.168.1.100
 python clipboard_sync.py --server-only
 ```
 
+**Auto-discovery:**
+
+```bash
+python clipboard_sync.py --discover
+```
+
 ## How It Works
 
 1. **Dual Mode**: Each device runs both a server (to receive updates) and a client (to send updates)
@@ -66,26 +94,71 @@ python clipboard_sync.py --server-only
 4. **Transmission**: Sends updates to all peer devices via HTTP POST
 5. **Reception**: Receives updates from peers and updates the local clipboard
 6. **Deduplication**: Prevents loops by tracking content hashes
+7. **Discovery**: Scans local network to find other clipboard sync instances
 
-## Network Requirements
+### Text
 
-- All devices must be on the same network
-- Port 8765 (or custom port) must be accessible between devices
-- Firewall may need to allow incoming connections on the specified port
+- **All platforms**: Full support for text clipboard content
+- **Size limit**: Configurable (default 10MB)
 
-## Limitations
+### Images
 
-- Currently optimized for text content
-- Image support is basic (framework is there for future enhancement)
-- No persistence (clipboard is only synced while running)
-- No encryption (data is sent over HTTP)
+- **Formats**: PNG, JPEG, and other common image formats
+- **macOS**: Full support using AppleScript (can read and set image clipboard)
+- **Windows**: Full support using `win32clipboard` (can read and set image clipboard)
+- **Linux**: Text-only support
+
+### Files
+
+- **All platforms**: Files are saved to a temporary directory
+- **Location**: `{temp_dir}/clipboard_sync/`
+- **Metadata**: Preserves original filename when available
+
+## Installation
+
+### Using Poetry (Recommended)
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd clipboard-sync
+
+# Install dependencies
+poetry install
+
+# Run the application
+poetry run python src/clipboard_sync/clipboard_sync.py --discover
+```
+
+### Using pip
+
+```bash
+# Install dependencies
+pip install flask pillow polykit pyperclip requests
+# On Windows, also install: pip install pywin32
+
+# Run the application
+python src/clipboard_sync/clipboard_sync.py --discover
+```
+
+## Notes
+
+- **This sends clipboard data over HTTP without encryption and should only be used on trusted networks**
+- The application runs in the background and monitors clipboard changes
+- Press Ctrl+C in the terminal to stop the application
+- Images are synced in real-time between Windows and macOS
+- Text and images are both supported with full feature parity
 
 ## Troubleshooting
 
 1. **Connection issues**: Check firewall settings and ensure devices are on same network
 2. **Permission errors**: On some systems, clipboard access may require special permissions
 3. **Port conflicts**: Try a different port with `--port` option
+4. **Discovery not working**: Ensure all devices are on the same subnet and firewalls allow the port
+5. **Image sync issues**: On Linux, images are saved to temp directory instead of clipboard
 
-## Security Note
+On Windows, you may also need to check for **pywin32 installation issues**:
 
-This application sends clipboard data over HTTP without encryption. Only use on trusted networks.
+   ```cmd
+   pip install --upgrade pywin32
+   ```
