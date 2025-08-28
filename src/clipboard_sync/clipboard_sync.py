@@ -9,7 +9,6 @@ changes.
 
 from __future__ import annotations
 
-import argparse
 import base64
 import hashlib
 import logging
@@ -25,10 +24,31 @@ from typing import Any
 import pyperclip
 import requests
 from flask import Flask, Response, jsonify, request
-from polykit import PolyLog
+from polykit import PolyArgs, PolyLog
 from polykit.cli import handle_interrupt
 
 logger = PolyLog.get_logger()
+
+LOCAL_PREFIXES = [
+    "192.168.",
+    "10.",
+    "172.16.",
+    "172.17.",
+    "172.18.",
+    "172.19.",
+    "172.20.",
+    "172.21.",
+    "172.22.",
+    "172.23.",
+    "172.24.",
+    "172.25.",
+    "172.26.",
+    "172.27.",
+    "172.28.",
+    "172.29.",
+    "172.30.",
+    "172.31.",
+]
 
 
 class ClipboardData:
@@ -60,8 +80,13 @@ class ClipboardData:
         """Convert to dictionary for JSON serialization."""
         if self.data_type == "text":
             content = self.content
-        else:  # image or file
-            content = base64.b64encode(self.content).decode("utf-8")
+        else:  # Image or file
+            # Ensure content is bytes before base64 encoding
+            if isinstance(self.content, str):
+                content_bytes = self.content.encode("utf-8")
+            else:
+                content_bytes = self.content
+            content = base64.b64encode(content_bytes).decode("utf-8")
 
         return {
             "type": self.data_type,
@@ -407,7 +432,6 @@ class ClipboardServer:
     def _set_file_clipboard(self, clipboard_data: ClipboardData) -> None:
         """Set file clipboard content."""
         try:
-            # For now, just save the file to a temp location
             filename = clipboard_data.metadata.get("filename", "clipboard_file")
             temp_dir = Path(tempfile.gettempdir()) / "clipboard_sync"
             temp_dir.mkdir(exist_ok=True)
@@ -430,20 +454,73 @@ class ClipboardServer:
         self.app.run(host="0.0.0.0", port=self.port, debug=False, threaded=True)
 
 
+def _get_all_interfaces() -> list[str]:
+    """Get all available network interface IPs."""
+    interfaces = []
+
+    try:
+        import netifaces
+
+        for interface in netifaces.interfaces():
+            addrs = netifaces.ifaddresses(interface)
+            if netifaces.AF_INET in addrs:
+                for addr_info in addrs[netifaces.AF_INET]:
+                    ip = addr_info["addr"]
+                    if not ip.startswith("127.") and not ip.startswith("169.254."):
+                        interfaces.append(ip)  # Skip loopback and link-local addresses
+    except ImportError:
+        try:  # Fallback to socket method if netifaces not available
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                local_ip = s.getsockname()[0]
+                interfaces.append(local_ip)
+        except Exception:
+            pass
+
+    return interfaces
+
+
+def _get_preferred_interface(interfaces: list[str]) -> str | None:
+    """Get the preferred interface from a list of available interfaces."""
+    for ip in interfaces:
+        for prefix in LOCAL_PREFIXES:
+            if ip.startswith(prefix):
+                network_parts = ip.split(".")
+                if len(network_parts) == 4:
+                    return ip
+
+    # If no preferred prefix found, use the first interface
+    if interfaces:
+        ip = interfaces[0]
+        network_parts = ip.split(".")
+        if len(network_parts) == 4:
+            return ip
+
+    return None
+
+
+def get_current_ip() -> str | None:
+    """Get the current IP address for this device."""
+    interfaces = _get_all_interfaces()
+    if not interfaces:
+        return None
+
+    return _get_preferred_interface(interfaces)
+
+
 def get_local_network_prefix() -> str | None:
     """Get the local network prefix for discovery."""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-    except Exception:
+    if not (interfaces := _get_all_interfaces()):
         logger.warning("Could not determine local IP address")
         return None
 
-    network_parts = local_ip.split(".")
-    if len(network_parts) != 4:
+    preferred_ip = _get_preferred_interface(interfaces)
+    if not preferred_ip:
+        logger.warning("No valid network interface found")
         return None
 
+    logger.info("Using network interface: %s", preferred_ip)
+    network_parts = preferred_ip.split(".")
     return ".".join(network_parts[:3]) + "."
 
 
@@ -460,11 +537,23 @@ def _check_host_for_clipboard_sync(ip: str, port: int, timeout: float, peers: li
         pass  # Host not reachable or not running clipboard sync
 
 
-def discover_peers(port: int, timeout: float = 2.0) -> list[str]:
+def discover_peers(port: int, timeout: float = 2.0, interface_ip: str | None = None) -> list[str]:
     """Discover other clipboard sync instances on the network."""
     peers = []
 
-    network_prefix = get_local_network_prefix()
+    network_prefix: str | None = None
+
+    if interface_ip:  # Use manually specified interface
+        network_parts = interface_ip.split(".")
+        if len(network_parts) == 4:
+            network_prefix = ".".join(network_parts[:3]) + "."
+            logger.info("Using specified network interface: %s", interface_ip)
+        else:
+            logger.error("Invalid interface IP format: %s", interface_ip)
+            return peers
+    elif not (network_prefix := get_local_network_prefix()):
+        return peers
+
     if not network_prefix:
         return peers
 
@@ -503,12 +592,12 @@ def shutdown() -> None:
 @handle_interrupt(callback=shutdown)
 def main():
     """Main application entry point."""
-    parser = argparse.ArgumentParser(description="Cross-platform clipboard sync")
+    parser = PolyArgs(description="Cross-platform clipboard sync")
     parser.add_argument(
         "--port",
         type=int,
         default=8765,
-        help="Port for the clipboard server (default: 8765)",
+        help="port for the clipboard server (default: 8765)",
     )
     parser.add_argument(
         "--peers",
@@ -520,38 +609,34 @@ def main():
         "--max-size",
         type=int,
         default=10,
-        help="Maximum clipboard size in MB (default: 10)",
+        help="maximum clipboard size in MB (default: 10)",
     )
     parser.add_argument(
         "--server-only",
         action="store_true",
-        help="Run as server only (no clipboard monitoring)",
+        help="run as server only (no clipboard monitoring)",
     )
+
     parser.add_argument(
-        "--discover",
-        action="store_true",
-        help="Automatically discover peers on the network",
+        "--interface",
+        type=str,
+        help="specify network interface IP (e.g., 192.168.1.100) for discovery",
     )
 
     args = parser.parse_args()
 
-    # Auto-discover peers if requested
-    if args.discover and not args.peers:
-        logger.info("Discovering peers on the network...")
-        discovered_peers = discover_peers(args.port)
+    # Auto-discover peers if no peers specified and not server-only mode
+    if not args.peers and not args.server_only:
+        logger.info("No peers specified. Discovering peers on the network...")
+        discovered_peers = discover_peers(args.port, interface_ip=args.interface)
         if discovered_peers:
             args.peers = discovered_peers
             logger.info("Using discovered peers: %s", ", ".join(discovered_peers))
         else:
             logger.warning("No peers discovered. You may need to specify peers manually.")
-
-    if not args.peers and not args.server_only:
-        logger.error(
-            "Please specify peer IP addresses with --peers, use --discover, or use --server-only."
-        )
-        logger.error("Example: python clipboard_sync.py --peers 192.168.1.100 192.168.1.101")
-        logger.error("Example: python clipboard_sync.py --discover")
-        return
+            logger.error("Please specify peer IP addresses with --peers or use --server-only.")
+            logger.error("Example: python clipboard_sync.py --peers 192.168.1.100 192.168.1.101")
+            return
 
     # Start the server in a background thread
     server = ClipboardServer(args.port)
@@ -565,6 +650,14 @@ def main():
     if not args.server_only and args.peers:
         monitor = ClipboardMonitor(args.port, args.peers, args.max_size)
         monitor.start()
+
+    # Log current IP address for easy peer configuration
+    current_ip = get_current_ip()
+    if current_ip:
+        logger.info("This device's IP address: %s", current_ip)
+        logger.info("Other devices can connect using: --peers %s", current_ip)
+    else:
+        logger.warning("Could not determine this device's IP address")
 
     logger.info("Clipboard sync is running. Press Ctrl+C to stop.")
     reported_platform = platform.system()

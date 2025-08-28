@@ -16,9 +16,23 @@ A simple Python application that synchronizes clipboard contents (text, images, 
 
 ## Usage
 
-### Basic Setup (Two Devices)
+### Basic Setup for Two Devices
 
-#### Option 1: Manual IP Configuration
+#### Automatic Network Discovery
+
+1. **Start on Device 1**:
+
+   ```bash
+   python clipboard_sync.py
+   ```
+
+2. **Start on Device 2**:
+
+   ```bash
+   python clipboard_sync.py
+   ```
+
+#### Manual IP Configuration
 
 1. **Find IP addresses**: On each device, find the local IP address
    - Windows: `ipconfig`
@@ -36,21 +50,11 @@ A simple Python application that synchronizes clipboard contents (text, images, 
    python clipboard_sync.py --peers 192.168.1.100
    ```
 
-#### Option 2: Automatic Network Discovery
+The application will automatically scan your local network and find other clipboard sync instances. Port 8765 (or a custom port) must be accessible between devices. Network discovery will scan the local subnet (e.g., 192.168.1.*).
 
-1. **Start on Device 1**:
+The application automatically detects the best network interface to use. If you have multiple network interfaces (e.g., Wi-Fi and Ethernet), you can specify which one to use with the `--interface` option.
 
-   ```bash
-   python clipboard_sync.py --discover
-   ```
-
-2. **Start on Device 2**:
-
-   ```bash
-   python clipboard_sync.py --discover
-   ```
-
-It will automatically scan your local network and find other clipboard sync instances. Port 8765 (or a custom port) must be accessible between devices. Network discovery will scan the local subnet (e.g., 192.168.1.*).
+When starting, the application displays its IP address and the exact command other devices can use to connect to it.
 
 ### Command Line Options
 
@@ -58,7 +62,7 @@ It will automatically scan your local network and find other clipboard sync inst
 - `--peers`: IP addresses of other devices (space-separated)
 - `--max-size`: Maximum clipboard size in MB (default: 10)
 - `--server-only`: Run as server only (no clipboard monitoring)
-- `--discover`: Automatically discover peers on the network
+- `--interface`: Specify network interface IP (e.g., 192.168.1.100) for discovery
 
 ### Examples
 
@@ -83,7 +87,13 @@ python clipboard_sync.py --server-only
 **Auto-discovery:**
 
 ```bash
-python clipboard_sync.py --discover
+python clipboard_sync.py
+```
+
+**Auto-discovery with specific interface:**
+
+```bash
+python clipboard_sync.py --interface 192.168.1.100
 ```
 
 ## How It Works
@@ -127,18 +137,18 @@ cd clipboard-sync
 poetry install
 
 # Run the application
-poetry run python src/clipboard_sync/clipboard_sync.py --discover
+poetry run python src/clipboard_sync/clipboard_sync.py
 ```
 
 ### Using pip
 
 ```bash
 # Install dependencies
-pip install flask pillow polykit pyperclip requests
+pip install flask pillow polykit pyperclip requests netifaces
 # On Windows, also install: pip install pywin32
 
 # Run the application
-python src/clipboard_sync/clipboard_sync.py --discover
+python src/clipboard_sync/clipboard_sync.py
 ```
 
 ## Notes
@@ -155,7 +165,8 @@ python src/clipboard_sync/clipboard_sync.py --discover
 2. **Permission errors**: On some systems, clipboard access may require special permissions
 3. **Port conflicts**: Try a different port with `--port` option
 4. **Discovery not working**: Ensure all devices are on the same subnet and firewalls allow the port
-5. **Image sync issues**: On Linux, images are saved to temp directory instead of clipboard
+5. **Wrong network interface**: Use `--interface` to specify the correct network interface IP
+6. **Image sync issues**: On Linux, images are saved to temp directory instead of clipboard
 
 On Windows, you may also need to check for **pywin32 installation issues**:
 
