@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Cross-platform clipboard synchronization application.
+"""Cross-platform cbsynchronization application.
 
 This application shares clipboard text content between devices on the same network. It runs a server
 to receive updates and a client to send updates when the local clipboard changes.
@@ -129,11 +129,11 @@ class ClipboardMonitor:
             except requests.exceptions.RequestException as e:
                 logger.debug("Could not reach peer %s: %s", peer, str(e))
 
-    def monitor_clipboard(self) -> None:
+    def monitor_clipboard(self, shutdown_event: threading.Event) -> None:
         """Monitor clipboard for changes and send updates."""
         logger.info("Starting clipboard monitoring...")
 
-        while self.running:
+        while self.running and not shutdown_event.is_set():
             try:
                 clipboard_data = self.get_clipboard_content()
 
@@ -147,16 +147,22 @@ class ClipboardMonitor:
                             self.send_to_peers(clipboard_data)
                             self.last_clipboard_hash = clipboard_data.hash
 
-                time.sleep(0.5)  # Check every 500ms
+                # Check for shutdown more frequently than clipboard changes
+                for _ in range(10):  # Check 10 times per 0.5 seconds
+                    if shutdown_event.is_set():
+                        break
+                    time.sleep(0.05)
 
             except Exception as e:
                 logger.error("Error in clipboard monitoring: %s", str(e))
                 time.sleep(1)
 
-    def start(self) -> None:
+    def start(self, shutdown_event: threading.Event) -> None:
         """Start clipboard monitoring in background thread."""
         self.running = True
-        monitor_thread = threading.Thread(target=self.monitor_clipboard, daemon=True)
+        monitor_thread = threading.Thread(
+            target=self.monitor_clipboard, args=(shutdown_event,), daemon=True
+        )
         monitor_thread.start()
         logger.info("Clipboard monitor started.")
 
@@ -166,17 +172,16 @@ class ClipboardMonitor:
         logger.info("Clipboard monitor stopped.")
 
 
-monitor: ClipboardMonitor | None = None
-
-
 class ClipboardServer:
     """Flask server to receive clipboard updates from other devices."""
 
-    def __init__(self, port: int):
+    def __init__(self, port: int, shutdown_event: threading.Event):
         self.port = port
+        self.shutdown_event = shutdown_event
         self.app = Flask(__name__)
         self.last_received_hash: str | None = None
         self.update_lock = threading.Lock()
+        self.server_thread: threading.Thread | None = None
 
         # Suppress Flask's request logging for cleaner output
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
@@ -231,6 +236,19 @@ class ClipboardServer:
                 "device_id": get_device_id(),
             }), 200
 
+        @self.app.route("/shutdown", methods=["POST"])
+        def shutdown_server() -> tuple[Response, int]:  # type: ignore[reportUnusedFunction]
+            """Endpoint to shutdown the server gracefully."""
+
+            def shutdown_server_internal():
+                time.sleep(0.5)  # Give time for response to be sent
+                self.shutdown_event.set()  # Signal shutdown to main thread
+
+            # Start shutdown in a separate thread to allow response to be sent
+            shutdown_thread = threading.Thread(target=shutdown_server_internal, daemon=True)
+            shutdown_thread.start()
+            return jsonify({"status": "shutting down"}), 200
+
     def _set_clipboard(self, clipboard_data: ClipboardData) -> None:
         """Set the local clipboard content."""
         try:
@@ -241,7 +259,111 @@ class ClipboardServer:
     def run(self) -> None:
         """Start the Flask server."""
         logger.info("Starting clipboard server on port %s.", self.port)
-        self.app.run(host="0.0.0.0", port=self.port, debug=False, threaded=True)
+        try:
+            self.app.run(host="0.0.0.0", port=self.port, debug=False, threaded=True)
+        except Exception as e:
+            if not self.shutdown_event.is_set():
+                logger.error("Flask server error: %s", str(e))
+
+    def start(self) -> None:
+        """Start the server in a background thread."""
+        self.server_thread = threading.Thread(target=self.run, daemon=True)
+        self.server_thread.start()
+
+    def stop(self) -> None:
+        """Stop the Flask server."""
+        logger.info("Stopping clipboard server...")
+        try:
+            # Shutdown Flask server gracefully
+            import requests
+
+            requests.post(f"http://localhost:{self.port}/shutdown", timeout=1)
+        except Exception:
+            # If graceful shutdown fails, the server will exit when the thread is terminated
+            pass
+
+        # Wait for server thread to finish
+        if self.server_thread and self.server_thread.is_alive():
+            self.server_thread.join(timeout=2)
+            if self.server_thread.is_alive():
+                logger.warning("Server thread did not stop gracefully")
+
+
+class ClipboardSyncApp:
+    """Main application class that manages all components."""
+
+    def __init__(self, port: int = 8765, peers: list[str] | None = None, max_size_mb: int = 10):
+        self.port = port
+        self.peers = peers or []
+        self.max_size_mb = max_size_mb
+        self.shutdown_event = threading.Event()
+
+        # Components
+        self.server: ClipboardServer | None = None
+        self.monitor: ClipboardMonitor | None = None
+
+    def start(self) -> None:
+        """Start the application."""
+        # Start the server first so other devices can discover us
+        self.server = ClipboardServer(self.port, self.shutdown_event)
+        self.server.start()
+
+        # Give the server a moment to start
+        time.sleep(1)
+
+        # Start clipboard monitoring if we have peers
+        if self.peers:
+            self.monitor = ClipboardMonitor(self.port, self.peers, self.max_size_mb)
+            self.monitor.start(self.shutdown_event)
+
+    def stop(self) -> None:
+        """Stop the application."""
+        logger.info("Shutting down...")
+
+        # Signal shutdown to all threads
+        self.shutdown_event.set()
+
+        # Stop clipboard monitor
+        if self.monitor:
+            self.monitor.stop()
+
+        # Stop Flask server
+        if self.server:
+            self.server.stop()
+
+        logger.info("Shutdown complete.")
+
+    def run(self) -> None:
+        """Run the application until shutdown."""
+        self.start()
+
+        # Log current IP address for easy peer configuration
+        current_ip = get_current_ip()
+        if current_ip:
+            logger.info("This device's IP address: %s", current_ip)
+            logger.info("Other devices can connect using: --peers %s", current_ip)
+        else:
+            logger.warning("Could not determine this device's IP address")
+
+        logger.info("cbsync is running. Press Ctrl+C to stop.")
+        reported_platform = platform.system()
+        if reported_platform == "Darwin":
+            reported_platform = "macOS"
+        logger.info("Platform: %s", reported_platform)
+        logger.info("Server port: %s", self.port)
+        if self.peers:
+            logger.info("Peers: %s", ", ".join(self.peers))
+
+        # Keep the main thread alive
+        try:
+            while not self.shutdown_event.is_set():
+                # Check for shutdown more frequently
+                for _ in range(10):
+                    if self.shutdown_event.is_set():
+                        break
+                    time.sleep(0.1)
+        except KeyboardInterrupt:
+            pass  # Let the shutdown function handle it
 
 
 def _get_all_interfaces() -> list[str]:
@@ -322,10 +444,10 @@ def get_device_id() -> str:
     return f"{hostname}-{device_uuid.hex[:8]}"
 
 
-def _check_host_for_clipboard_sync(
+def _check_host_for_cbsync(
     ip: str, port: int, timeout: float, peers: list[str], seen_devices: set[str], our_device_id: str
 ) -> None:
-    """Check if a specific IP is running clipboard sync."""
+    """Check if a specific IP is running cbsync."""
     try:
         response = requests.get(f"http://{ip}:{port}/discover", timeout=timeout)
         if response.status_code == 200:
@@ -344,7 +466,7 @@ def _check_host_for_clipboard_sync(
                     peers.append(ip)
                     logger.info("Found peer: %s (%s)", ip, data.get("hostname", "unknown"))
     except Exception:
-        pass  # Host not reachable or not running clipboard sync
+        pass  # Host not reachable or not running cbsync
 
 
 def _scan_network_range(
@@ -355,12 +477,12 @@ def _scan_network_range(
     seen_devices: set[str],
     our_device_id: str,
 ) -> None:
-    """Scan a network range for clipboard sync instances."""
+    """Scan a network range for cbsync instances."""
     threads = []
     for i in range(1, 255):
         ip = f"{network_prefix}{i}"
         thread = threading.Thread(
-            target=_check_host_for_clipboard_sync,
+            target=_check_host_for_cbsync,
             args=(ip, port, timeout, peers, seen_devices, our_device_id),
             daemon=True,
         )
@@ -393,7 +515,7 @@ def _get_network_prefix(interface_ip: str | None) -> str | None:
 
 
 def discover_peers(port: int, timeout: float = 2.0, interface_ip: str | None = None) -> list[str]:
-    """Discover other clipboard sync instances on the network."""
+    """Discover other cbsync instances on the network."""
     peers = []
     seen_devices = set()
     our_device_id = get_device_id()
@@ -401,7 +523,7 @@ def discover_peers(port: int, timeout: float = 2.0, interface_ip: str | None = N
     if not (network_prefix := _get_network_prefix(interface_ip)):
         return peers
 
-    logger.info("Scanning network %s* for clipboard sync instances...", network_prefix)
+    logger.info("Scanning network %s* for cbsync instances...", network_prefix)
 
     for attempt in range(10):  # Try multiple times to account for timing issues
         if attempt > 0:
@@ -419,17 +541,10 @@ def discover_peers(port: int, timeout: float = 2.0, interface_ip: str | None = N
     return peers
 
 
-def shutdown() -> None:
-    """Shutdown the application."""
-    logger.info("Shutting down...")
-    if monitor:
-        monitor.stop()
-
-
-@handle_interrupt(callback=shutdown)
+@handle_interrupt()
 def main():
     """Main application entry point."""
-    parser = PolyArgs(description="Cross-platform clipboard sync")
+    parser = PolyArgs(description="Cross-platform cbsync")
     parser.add_argument(
         "--port",
         type=int,
@@ -449,12 +564,6 @@ def main():
         help="maximum clipboard size in MB (default: 10)",
     )
     parser.add_argument(
-        "--server-only",
-        action="store_true",
-        help="run as server only (no clipboard monitoring)",
-    )
-
-    parser.add_argument(
         "--interface",
         type=str,
         help="specify network interface IP (e.g., 192.168.1.100) for discovery",
@@ -462,52 +571,22 @@ def main():
 
     args = parser.parse_args()
 
-    # Start the server first so other devices can discover us
-    server = ClipboardServer(args.port)
-    server_thread = threading.Thread(target=server.run, daemon=True)
-    server_thread.start()
-
-    # Give the server a moment to start
-    time.sleep(1)
-
-    # Auto-discover peers if no peers specified and not server-only mode
-    if not args.peers and not args.server_only:
+    # Auto-discover peers if no peers specified
+    if not args.peers:
         logger.info("No peers specified. Discovering peers on the network...")
         discovered_peers = discover_peers(args.port, interface_ip=args.interface)
         if discovered_peers:
             args.peers = discovered_peers
             logger.info("Using discovered peers: %s", ", ".join(discovered_peers))
         else:
-            logger.warning("No peers discovered. You may need to specify peers manually.")
-            logger.error("Please specify peer IP addresses with --peers or use --server-only.")
-            logger.error("Example: python clipboard_sync.py --peers 192.168.1.100 192.168.1.101")
-            return
+            logger.warning("No peers discovered. The application will run in server-only mode.")
+            logger.info("Other devices can connect once they discover this instance.")
 
-    # Start clipboard monitoring if not server-only mode
-    if not args.server_only and args.peers:
-        monitor = ClipboardMonitor(args.port, args.peers, args.max_size)
-        monitor.start()
+    # Create and run the application
+    app = ClipboardSyncApp(args.port, args.peers, args.max_size)
 
-    # Log current IP address for easy peer configuration
-    current_ip = get_current_ip()
-    if current_ip:
-        logger.info("This device's IP address: %s", current_ip)
-        logger.info("Other devices can connect using: --peers %s", current_ip)
-    else:
-        logger.warning("Could not determine this device's IP address")
-
-    logger.info("Clipboard sync is running. Press Ctrl+C to stop.")
-    reported_platform = platform.system()
-    if reported_platform == "Darwin":
-        reported_platform = "macOS"
-    logger.info("Platform: %s", reported_platform)
-    logger.info("Server port: %s", args.port)
-    if args.peers:
-        logger.info("Peers: %s", ", ".join(args.peers))
-
-    # Keep the main thread alive
-    while True:
-        time.sleep(1)
+    # Run the application
+    app.run()
 
 
 if __name__ == "__main__":

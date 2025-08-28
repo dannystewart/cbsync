@@ -1,11 +1,11 @@
-$pidFile = "$env:TEMP\clipboard-sync.pid"
+$pidFile = "$env:TEMP\cbsync.pid"
 
 if (Test-Path $pidFile) {
     $processId = Get-Content $pidFile
     try {
         Stop-Process -Id $processId -Force
         Remove-Item $pidFile
-        Write-Host "Clipboard sync stopped (PID: $processId)"
+        Write-Host "cbsync stopped (PID: $processId)"
     }
     catch {
         Write-Host "Process $processId not found or already stopped"
@@ -13,5 +13,5 @@ if (Test-Path $pidFile) {
     }
 }
 else {
-    Write-Host "No clipboard sync PID file found. Process may not be running."
+    Write-Host "No cbsync PID file found. Process may not be running."
 }

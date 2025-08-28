@@ -1,7 +1,7 @@
 [project]
-name = "clipboard-sync"
+name = "cbsync"
 version = "0.1.0"
-description = ""
+description = "Clipboard sync between devices"
 authors = [
     {name = "Danny Stewart",email = "danny@stewart.cc"}
 ]
@@ -26,4 +26,5 @@ requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [project.scripts]
-clipboard-sync = "clipboard_sync.clipboard_sync:main"
+cbsync = "cbsync.cbsync:main"
+cbsman = "cbsync.cbsync_manager:main"

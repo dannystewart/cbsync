@@ -1,4 +1,4 @@
-# Cross-Platform Clipboard Sync
+# cbsync: Cross-Platform Clipboard Sync
 
 A simple Python application that synchronizes clipboard text content between devices on the same network.
 
@@ -20,13 +20,13 @@ A simple Python application that synchronizes clipboard text content between dev
 1. **Start on Device 1**:
 
    ```bash
-   python clipboard_sync.py
+   cbsync
    ```
 
 2. **Start on Device 2**:
 
    ```bash
-   python clipboard_sync.py
+   cbsync
    ```
 
 #### Manual IP Configuration
@@ -38,13 +38,13 @@ A simple Python application that synchronizes clipboard text content between dev
 2. **Start on Device 1** (e.g., Windows PC at 192.168.1.100):
 
    ```bash
-   python clipboard_sync.py --peers 192.168.1.101
+   cbsync --peers 192.168.1.101
    ```
 
 3. **Start on Device 2** (e.g., Mac at 192.168.1.101):
 
    ```bash
-   python clipboard_sync.py --peers 192.168.1.100
+   cbsync --peers 192.168.1.100
    ```
 
 The application will automatically scan your local network and find other clipboard sync instances. Port 8765 (or a custom port) must be accessible between devices. Network discovery will scan the local subnet (e.g., 192.168.1.*).
@@ -58,7 +58,6 @@ When starting, the application displays its IP address and the exact command oth
 - `--port`: Port for the server (default: 8765)
 - `--peers`: IP addresses of other devices (space-separated)
 - `--max-size`: Maximum clipboard size in MB (default: 10)
-- `--server-only`: Run as server only (no clipboard monitoring)
 - `--interface`: Specify network interface IP (e.g., 192.168.1.100) for discovery
 
 ### Examples
@@ -66,32 +65,49 @@ When starting, the application displays its IP address and the exact command oth
 **Multiple peers:**
 
 ```bash
-python clipboard_sync.py --peers 192.168.1.100 192.168.1.101 192.168.1.102
+cbsync --peers 192.168.1.100 192.168.1.101 192.168.1.102
 ```
 
 **Custom port:**
 
 ```bash
-python clipboard_sync.py --port 9000 --peers 192.168.1.100
-```
-
-**Server only mode:**
-
-```bash
-python clipboard_sync.py --server-only
+cbsync --port 9000 --peers 192.168.1.100
 ```
 
 **Auto-discovery:**
 
 ```bash
-python clipboard_sync.py
+cbsync
 ```
 
 **Auto-discovery with specific interface:**
 
 ```bash
-python clipboard_sync.py --interface 192.168.1.100
+cbsync --interface 192.168.1.100
 ```
+
+## Process Management
+
+For easier process management, you can use the included management script:
+
+```bash
+# Start the application
+cbsman start
+
+# Check status
+cbsman status
+
+# View logs
+cbsman logs
+
+# Stop the application
+cbsman stop
+
+# Restart the application
+cbsman restart
+```
+
+The management script handles graceful shutdown and prevents orphaned processes.
 
 ## How It Works
 
@@ -110,23 +126,24 @@ python clipboard_sync.py --interface 192.168.1.100
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd clipboard-sync
+cd cbsync
 
 # Install dependencies
 poetry install
 
 # Run the application
-poetry run python src/clipboard_sync/clipboard_sync.py
+poetry run cbsync
 ```
 
 ### Using pip
 
 ```bash
-# Install dependencies
+# Install dependencies, then install cbsync
 pip install flask polykit pyperclip requests netifaces
+pip install .
 
 # Run the application
-python src/clipboard_sync/clipboard_sync.py
+cbsync
 ```
 
 ## Notes
@@ -143,3 +160,4 @@ python src/clipboard_sync/clipboard_sync.py
 3. **Port conflicts**: Try a different port with `--port` option
 4. **Discovery not working**: Ensure all devices are on the same subnet and firewalls allow the port
 5. **Wrong network interface**: Use `--interface` to specify the correct network interface IP
+6. **Process management**: Use the included management script for easier process control
