@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -641,6 +642,14 @@ def main():
 
     args = parser.parse_args()
 
+    # Start the server first so other devices can discover us
+    server = ClipboardServer(args.port)
+    server_thread = threading.Thread(target=server.run, daemon=True)
+    server_thread.start()
+
+    # Give the server a moment to start
+    time.sleep(1)
+
     # Auto-discover peers if no peers specified and not server-only mode
     if not args.peers and not args.server_only:
         logger.info("No peers specified. Discovering peers on the network...")
@@ -653,14 +662,6 @@ def main():
             logger.error("Please specify peer IP addresses with --peers or use --server-only.")
             logger.error("Example: python clipboard_sync.py --peers 192.168.1.100 192.168.1.101")
             return
-
-    # Start the server in a background thread
-    server = ClipboardServer(args.port)
-    server_thread = threading.Thread(target=server.run, daemon=True)
-    server_thread.start()
-
-    # Give the server a moment to start
-    time.sleep(1)
 
     # Start clipboard monitoring if not server-only mode
     if not args.server_only and args.peers:
