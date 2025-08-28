@@ -2,24 +2,19 @@
 
 """Cross-platform clipboard synchronization application.
 
-This application shares clipboard contents (text, images, and files) between devices on the same
-network. It runs a server to receive updates and a client to send updates when the local clipboard
-changes.
+This application shares clipboard text content between devices on the same network. It runs a server
+to receive updates and a client to send updates when the local clipboard changes.
 """
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import logging
 import platform
 import socket
-import subprocess
-import tempfile
 import threading
 import time
 import uuid
-from pathlib import Path
 from typing import Any
 
 import pyperclip
@@ -53,45 +48,28 @@ LOCAL_PREFIXES = [
 
 
 class ClipboardData:
-    """Represents clipboard data with type and content."""
+    """Represents clipboard text data."""
 
     def __init__(
         self,
-        data_type: str,
-        content: str | bytes,
-        size: int,
+        content: str,
         metadata: dict[str, Any] | None = None,
     ):
-        self.data_type = data_type
         self.content = content
-        self.size = size
+        self.size = len(content.encode("utf-8"))
         self.metadata = metadata or {}
         self.timestamp = time.time()
         self.hash = self._calculate_hash()
 
     def _calculate_hash(self) -> str:
         """Calculate hash of the content for deduplication."""
-        if isinstance(self.content, str):
-            content_bytes = self.content.encode("utf-8")
-        else:
-            content_bytes = self.content
+        content_bytes = self.content.encode("utf-8")
         return hashlib.sha256(content_bytes).hexdigest()[:16]
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
-        if self.data_type == "text":
-            content = self.content
-        else:  # Image or file
-            # Ensure content is bytes before base64 encoding
-            if isinstance(self.content, str):
-                content_bytes = self.content.encode("utf-8")
-            else:
-                content_bytes = self.content
-            content = base64.b64encode(content_bytes).decode("utf-8")
-
         return {
-            "type": self.data_type,
-            "content": content,
+            "content": self.content,
             "size": self.size,
             "metadata": self.metadata,
             "timestamp": self.timestamp,
@@ -101,11 +79,7 @@ class ClipboardData:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ClipboardData:
         """Create ClipboardData from dictionary."""
-        content = data["content"]
-        if data["type"] in {"image", "file"}:
-            content = base64.b64decode(content)
-
-        obj = cls(data["type"], content, data["size"], data.get("metadata"))
+        obj = cls(data["content"], data.get("metadata"))
         obj.timestamp = data["timestamp"]
         obj.hash = data["hash"]
         return obj
@@ -124,124 +98,17 @@ class ClipboardMonitor:
         self.session = requests.Session()
 
     def get_clipboard_content(self) -> ClipboardData | None:
-        """Get current clipboard content if it's text, image, or file."""
+        """Get current clipboard text content."""
         try:
-            if platform.system() == "Darwin":  # macOS
-                return self._get_macos_clipboard()
-            if platform.system() == "Windows":
-                return self._get_windows_clipboard()
-            # Linux
-            return self._get_linux_clipboard()
+            text_content = pyperclip.paste()
+            if text_content:
+                content_bytes = text_content.encode("utf-8")
+                if len(content_bytes) <= self.max_size_bytes:
+                    return ClipboardData(text_content)
+                logger.warning("Clipboard text too large: %s bytes.", len(content_bytes))
 
         except Exception as e:
             logger.error("Error reading clipboard: %s", str(e))
-
-        return None
-
-    def _get_macos_clipboard(self) -> ClipboardData | None:
-        """Get clipboard content on macOS."""
-        try:
-            # Try to get image first
-            result = subprocess.run(
-                ["osascript", "-e", "the clipboard as «class PNGf»"],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                # We have image data, let's save it to a temp file and read it
-                try:
-                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
-                        tmp_path = tmp_file.name
-
-                    # Save clipboard image to temp file
-                    subprocess.run(
-                        ["osascript", "-e", "set the clipboard to (the clipboard as «class PNGf»)"],
-                        check=True,
-                    )
-
-                    # Read the image file
-                    with Path(tmp_path).open("rb") as f:
-                        image_data = f.read()
-
-                    # Clean up temp file
-                    Path(tmp_path).unlink()
-
-                    if len(image_data) <= self.max_size_bytes:
-                        return ClipboardData("image", image_data, len(image_data))
-                    logger.warning("Clipboard image too large: %s bytes.", len(image_data))
-
-                except Exception as img_e:
-                    logger.debug("Failed to read image from clipboard: %s", str(img_e))
-
-            # Get text content
-            text_content = pyperclip.paste()
-            if text_content:
-                content_bytes = text_content.encode("utf-8")
-                if len(content_bytes) <= self.max_size_bytes:
-                    return ClipboardData("text", text_content, len(content_bytes))
-                logger.warning("Clipboard text too large: %s bytes.", len(content_bytes))
-
-        except Exception as e:
-            logger.error("Error reading macOS clipboard: %s", str(e))
-
-        return None
-
-    def _get_windows_clipboard(self) -> ClipboardData | None:
-        """Get clipboard content on Windows."""
-        try:
-            # Try to get image first
-            try:
-                import win32clipboard  # type: ignore
-                import win32con  # type: ignore
-
-                win32clipboard.OpenClipboard()
-
-                # Check if there's an image in the clipboard
-                if win32clipboard.IsClipboardFormatAvailable(win32con.CF_DIB):
-                    # Get the image data
-                    image_data = win32clipboard.GetClipboardData(win32con.CF_DIB)
-                    win32clipboard.CloseClipboard()
-
-                    if len(image_data) <= self.max_size_bytes:
-                        return ClipboardData("image", image_data, len(image_data))
-                    logger.warning("Clipboard image too large: %s bytes.", len(image_data))
-                    return None
-
-                win32clipboard.CloseClipboard()
-
-            except ImportError:
-                logger.debug("win32clipboard not available, skipping image support")
-            except Exception as img_e:
-                logger.debug("Failed to read image from Windows clipboard: %s", str(img_e))
-
-            # Get text content
-            text_content = pyperclip.paste()
-            if text_content:
-                content_bytes = text_content.encode("utf-8")
-                if len(content_bytes) <= self.max_size_bytes:
-                    return ClipboardData("text", text_content, len(content_bytes))
-                logger.warning("Clipboard text too large: %s bytes.", len(content_bytes))
-
-        except Exception as e:
-            logger.error("Error reading Windows clipboard: %s", str(e))
-
-        return None
-
-    def _get_linux_clipboard(self) -> ClipboardData | None:
-        """Get clipboard content on Linux."""
-        try:
-            # Try to get text content
-            text_content = pyperclip.paste()
-            if text_content:
-                content_bytes = text_content.encode("utf-8")
-                if len(content_bytes) <= self.max_size_bytes:
-                    return ClipboardData("text", text_content, len(content_bytes))
-                logger.warning("Clipboard text too large: %s bytes.", len(content_bytes))
-
-        except Exception as e:
-            logger.error("Error reading Linux clipboard: %s", str(e))
 
         return None
 
@@ -274,8 +141,7 @@ class ClipboardMonitor:
                     with self.update_lock:  # Double-check after acquiring lock
                         if clipboard_data.hash != self.last_clipboard_hash:
                             logger.debug(
-                                "Local clipboard changed: %s (%s bytes).",
-                                clipboard_data.data_type,
+                                "Local clipboard changed: %s bytes.",
                                 clipboard_data.size,
                             )
                             self.send_to_peers(clipboard_data)
@@ -334,9 +200,8 @@ class ClipboardServer:
                         self._set_clipboard(clipboard_data)
                         self.last_received_hash = clipboard_data.hash
                         logger.info(
-                            "Clipboard updated from %s: %s (%s bytes).",
+                            "Clipboard updated from %s: %s bytes.",
                             request.remote_addr,
-                            clipboard_data.data_type,
                             clipboard_data.size,
                         )
                     else:
@@ -369,86 +234,9 @@ class ClipboardServer:
     def _set_clipboard(self, clipboard_data: ClipboardData) -> None:
         """Set the local clipboard content."""
         try:
-            if clipboard_data.data_type == "text":
-                pyperclip.copy(clipboard_data.content)
-            elif clipboard_data.data_type == "image":
-                self._set_image_clipboard(clipboard_data)
-            elif clipboard_data.data_type == "file":
-                self._set_file_clipboard(clipboard_data)
-            else:
-                logger.warning("Unknown clipboard type: %s", clipboard_data.data_type)
-
+            pyperclip.copy(clipboard_data.content)
         except Exception as e:
             logger.error("Error setting clipboard: %s", str(e))
-
-    def _set_image_clipboard(self, clipboard_data: ClipboardData) -> None:
-        """Set image clipboard content."""
-        if platform.system() == "Darwin":  # macOS
-            try:
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
-                    if isinstance(clipboard_data.content, str):
-                        tmp_file.write(clipboard_data.content.encode("utf-8"))
-                    else:
-                        tmp_file.write(clipboard_data.content)
-                    tmp_path = tmp_file.name
-
-                subprocess.run(
-                    [
-                        "osascript",
-                        "-e",
-                        f'set the clipboard to (read (POSIX file "{tmp_path}") as «class PNGf»)',
-                    ],
-                    check=True,
-                )
-
-                # Clean up temp file
-                Path(tmp_path).unlink()
-                logger.info("Image set to clipboard on macOS")
-
-            except Exception as e:
-                logger.error("Error setting image clipboard on macOS: %s", str(e))
-
-        elif platform.system() == "Windows":  # Windows
-            try:
-                import win32clipboard  # type: ignore
-                import win32con  # type: ignore
-
-                win32clipboard.OpenClipboard()
-                win32clipboard.EmptyClipboard()
-
-                # Set the image data to clipboard
-                win32clipboard.SetClipboardData(win32con.CF_DIB, clipboard_data.content)
-                win32clipboard.CloseClipboard()
-
-                logger.info("Image set to clipboard on Windows")
-
-            except ImportError:
-                logger.warning(
-                    "win32clipboard not available, cannot set image clipboard on Windows"
-                )
-            except Exception as e:
-                logger.error("Error setting image clipboard on Windows: %s", str(e))
-        else:
-            logger.info("Image clipboard not implemented for this platform")
-
-    def _set_file_clipboard(self, clipboard_data: ClipboardData) -> None:
-        """Set file clipboard content."""
-        try:
-            filename = clipboard_data.metadata.get("filename", "clipboard_file")
-            temp_dir = Path(tempfile.gettempdir()) / "clipboard_sync"
-            temp_dir.mkdir(exist_ok=True)
-
-            file_path = temp_dir / filename
-            with file_path.open("wb") as f:
-                if isinstance(clipboard_data.content, str):
-                    f.write(clipboard_data.content.encode("utf-8"))
-                else:
-                    f.write(clipboard_data.content)
-
-            logger.info("File saved to: %s", file_path)
-
-        except Exception as e:
-            logger.error("Error handling file clipboard: %s", str(e))
 
     def run(self) -> None:
         """Start the Flask server."""

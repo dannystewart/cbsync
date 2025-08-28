@@ -1,14 +1,11 @@
 # Cross-Platform Clipboard Sync
 
-A simple Python application that synchronizes clipboard contents (text, images, and files) between devices on the same network.
+A simple Python application that synchronizes clipboard text content between devices on the same network.
 
 ## Features
 
 - **Real-time sync**: Automatically detects clipboard changes and syncs them
 - **Cross-platform**: Works on Windows, macOS, and Linux
-- **Text support**: Syncs text clipboard content
-- **Image support**: Syncs image clipboard content (macOS and Windows only)
-- **File support**: Handles file drops and saves them to a temp directory
 - **Network discovery**: Automatically find other clipboard sync instances on your network
 - **Size limits**: Configurable maximum clipboard size (default: 10MB)
 - **Network-based**: Uses HTTP for communication between devices
@@ -106,24 +103,6 @@ python clipboard_sync.py --interface 192.168.1.100
 6. **Deduplication**: Prevents loops by tracking content hashes
 7. **Discovery**: Scans local network to find other clipboard sync instances
 
-### Text
-
-- **All platforms**: Full support for text clipboard content
-- **Size limit**: Configurable (default 10MB)
-
-### Images
-
-- **Formats**: PNG, JPEG, and other common image formats
-- **macOS**: Full support using AppleScript (can read and set image clipboard)
-- **Windows**: Full support using `win32clipboard` (can read and set image clipboard)
-- **Linux**: Text-only support
-
-### Files
-
-- **All platforms**: Files are saved to a temporary directory
-- **Location**: `{temp_dir}/clipboard_sync/`
-- **Metadata**: Preserves original filename when available
-
 ## Installation
 
 ### Using Poetry (Recommended)
@@ -144,8 +123,7 @@ poetry run python src/clipboard_sync/clipboard_sync.py
 
 ```bash
 # Install dependencies
-pip install flask pillow polykit pyperclip requests netifaces
-# On Windows, also install: pip install pywin32
+pip install flask polykit pyperclip requests netifaces
 
 # Run the application
 python src/clipboard_sync/clipboard_sync.py
@@ -156,8 +134,7 @@ python src/clipboard_sync/clipboard_sync.py
 - **This sends clipboard data over HTTP without encryption and should only be used on trusted networks**
 - The application runs in the background and monitors clipboard changes
 - Press Ctrl+C in the terminal to stop the application
-- Images are synced in real-time between Windows and macOS
-- Text and images are both supported with full feature parity
+- Text content is synced in real-time across all platforms
 
 ## Troubleshooting
 
@@ -166,10 +143,3 @@ python src/clipboard_sync/clipboard_sync.py
 3. **Port conflicts**: Try a different port with `--port` option
 4. **Discovery not working**: Ensure all devices are on the same subnet and firewalls allow the port
 5. **Wrong network interface**: Use `--interface` to specify the correct network interface IP
-6. **Image sync issues**: On Linux, images are saved to temp directory instead of clipboard
-
-On Windows, you may also need to check for **pywin32 installation issues**:
-
-   ```cmd
-   pip install --upgrade pywin32
-   ```
