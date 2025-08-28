@@ -363,6 +363,7 @@ class ClipboardServer:
                 "platform": platform.system(),
                 "hostname": socket.gethostname(),
                 "port": self.port,
+                "device_id": get_device_id(),
             }), 200
 
     def _set_clipboard(self, clipboard_data: ClipboardData) -> None:
@@ -525,26 +526,55 @@ def get_local_network_prefix() -> str | None:
     return ".".join(network_parts[:3]) + "."
 
 
-def _check_host_for_clipboard_sync(ip: str, port: int, timeout: float, peers: list[str]) -> None:
+def get_device_id() -> str:
+    """Generate a unique device identifier."""
+    hostname = socket.gethostname()
+    # Use a deterministic UUID based on hostname to ensure same device gets same ID
+    device_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, hostname)
+    return f"{hostname}-{device_uuid.hex[:8]}"
+
+
+def _check_host_for_clipboard_sync(
+    ip: str, port: int, timeout: float, peers: list[str], seen_devices: set[str], our_device_id: str
+) -> None:
     """Check if a specific IP is running clipboard sync."""
     try:
         response = requests.get(f"http://{ip}:{port}/discover", timeout=timeout)
         if response.status_code == 200:
             data = response.json()
             if data.get("status") == "available":
-                peers.append(ip)
-                logger.info("Found peer: %s (%s)", ip, data.get("hostname", "unknown"))
+                device_id = data.get("device_id", f"{data.get('hostname', 'unknown')}-{ip}")
+
+                # Don't add ourselves to the peer list!
+                if device_id == our_device_id:
+                    logger.debug("Skipping our own device: %s", device_id)
+                    return
+
+                # Only add if we haven't seen this device before
+                if device_id not in seen_devices:
+                    seen_devices.add(device_id)
+                    peers.append(ip)
+                    logger.info("Found peer: %s (%s)", ip, data.get("hostname", "unknown"))
     except Exception:
         pass  # Host not reachable or not running clipboard sync
 
 
-def _scan_network_range(network_prefix: str, port: int, timeout: float, peers: list[str]) -> None:
+def _scan_network_range(
+    network_prefix: str,
+    port: int,
+    timeout: float,
+    peers: list[str],
+    seen_devices: set[str],
+    our_device_id: str,
+) -> None:
     """Scan a network range for clipboard sync instances."""
     threads = []
     for i in range(1, 255):
         ip = f"{network_prefix}{i}"
         thread = threading.Thread(
-            target=_check_host_for_clipboard_sync, args=(ip, port, timeout, peers), daemon=True
+            target=_check_host_for_clipboard_sync,
+            args=(ip, port, timeout, peers, seen_devices, our_device_id),
+            daemon=True,
         )
         threads.append(thread)
         thread.start()
@@ -577,6 +607,8 @@ def _get_network_prefix(interface_ip: str | None) -> str | None:
 def discover_peers(port: int, timeout: float = 2.0, interface_ip: str | None = None) -> list[str]:
     """Discover other clipboard sync instances on the network."""
     peers = []
+    seen_devices = set()
+    our_device_id = get_device_id()
 
     if not (network_prefix := _get_network_prefix(interface_ip)):
         return peers
@@ -588,7 +620,7 @@ def discover_peers(port: int, timeout: float = 2.0, interface_ip: str | None = N
             logger.debug("Retry attempt %d of 10...", attempt + 1)
             time.sleep(1)
 
-        _scan_network_range(network_prefix, port, timeout, peers)
+        _scan_network_range(network_prefix, port, timeout, peers, seen_devices, our_device_id)
 
         if peers:  # If we found peers, we can stop early
             break
