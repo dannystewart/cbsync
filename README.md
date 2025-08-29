@@ -11,45 +11,7 @@ A simple Python application that synchronizes clipboard text content between dev
 - **Network-based**: Uses HTTP for communication between devices
 - **Deduplication**: Prevents infinite loops and duplicate updates
 
-## Usage
-
-### Basic Setup for Two Devices
-
-#### Automatic Network Discovery
-
-1. **Start on Device 1**:
-
-   ```bash
-   cbsync
-   ```
-
-2. **Start on Device 2**:
-
-   ```bash
-   cbsync
-   ```
-
-#### Manual IP Configuration
-
-1. **Find IP addresses**: On each device, find the local IP address
-   - Windows: `ipconfig`
-   - Mac/Linux: `ifconfig` or `ip addr`
-
-2. **Start on Device 1** (e.g., Windows PC at 192.168.1.100):
-
-   ```bash
-   cbsync --peers 192.168.1.101
-   ```
-
-3. **Start on Device 2** (e.g., Mac at 192.168.1.101):
-
-   ```bash
-   cbsync --peers 192.168.1.100
-   ```
-
-The application will automatically scan your local network and find other clipboard sync instances. Port 8765 (or a custom port) must be accessible between devices. Network discovery will scan the local subnet (e.g., 192.168.1.*).
-
-The application automatically detects the best network interface to use. If you have multiple network interfaces (e.g., Wi-Fi and Ethernet), you can specify which one to use with the `--interface` option.
+The application will automatically scan your local network and find other clipboard sync instances. Port 8765 (or a custom port) must be accessible between devices. Network discovery will scan the local subnet (e.g., 192.168.1.*). If you have multiple network interfaces (e.g., Wi-Fi and Ethernet), you can specify which one to use with the `--interface` option.
 
 When starting, the application displays its IP address and the exact command other devices can use to connect to it.
 
@@ -62,6 +24,12 @@ When starting, the application displays its IP address and the exact command oth
 
 ### Examples
 
+**Auto-discovery:**
+
+```bash
+cbsync
+```
+
 **Multiple peers:**
 
 ```bash
@@ -72,12 +40,6 @@ cbsync --peers 192.168.1.100 192.168.1.101 192.168.1.102
 
 ```bash
 cbsync --port 9000 --peers 192.168.1.100
-```
-
-**Auto-discovery:**
-
-```bash
-cbsync
 ```
 
 **Auto-discovery with specific interface:**
@@ -108,56 +70,3 @@ cbsman restart
 ```
 
 The management script handles graceful shutdown and prevents orphaned processes.
-
-## How It Works
-
-1. **Dual Mode**: Each device runs both a server (to receive updates) and a client (to send updates)
-2. **Monitoring**: Continuously monitors the local clipboard for changes
-3. **Detection**: Uses content hashing to detect when clipboard content changes
-4. **Transmission**: Sends updates to all peer devices via HTTP POST
-5. **Reception**: Receives updates from peers and updates the local clipboard
-6. **Deduplication**: Prevents loops by tracking content hashes
-7. **Discovery**: Scans local network to find other clipboard sync instances
-
-## Installation
-
-### Using Poetry (Recommended)
-
-```bash
-# Clone the repository
-git clone <repository-url>
-cd cbsync
-
-# Install dependencies
-poetry install
-
-# Run the application
-poetry run cbsync
-```
-
-### Using pip
-
-```bash
-# Install dependencies, then install cbsync
-pip install flask polykit pyperclip requests netifaces
-pip install .
-
-# Run the application
-cbsync
-```
-
-## Notes
-
-- **This sends clipboard data over HTTP without encryption and should only be used on trusted networks**
-- The application runs in the background and monitors clipboard changes
-- Press Ctrl+C in the terminal to stop the application
-- Text content is synced in real-time across all platforms
-
-## Troubleshooting
-
-1. **Connection issues**: Check firewall settings and ensure devices are on same network
-2. **Permission errors**: On some systems, clipboard access may require special permissions
-3. **Port conflicts**: Try a different port with `--port` option
-4. **Discovery not working**: Ensure all devices are on the same subnet and firewalls allow the port
-5. **Wrong network interface**: Use `--interface` to specify the correct network interface IP
-6. **Process management**: Use the included management script for easier process control
