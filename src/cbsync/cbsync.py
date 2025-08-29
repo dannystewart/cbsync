@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import platform
+import re
 import socket
 import threading
 import time
@@ -47,6 +48,35 @@ LOCAL_PREFIXES = [
 ]
 
 
+def normalize_text(text: str) -> str:
+    r"""Normalize text content for better comparison and deduplication.
+
+    This function:
+    - Normalizes line endings to \n
+    - Removes trailing whitespace from lines
+    - Normalizes multiple consecutive whitespace characters
+    - Removes empty lines at the beginning and end
+    """
+    if not text:
+        return ""
+
+    # Normalize line endings to \n
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    # Split into lines and normalize each line
+    lines = text.split("\n")
+    normalized_lines = []
+
+    for line in lines:
+        # Remove trailing whitespace and normalize internal whitespace
+        normalized_line = re.sub(r"\s+", " ", line.strip())
+        if normalized_line:  # Only add non-empty lines
+            normalized_lines.append(normalized_line)
+
+    # Join lines back together
+    return "\n".join(normalized_lines)
+
+
 class ClipboardData:
     """Represents clipboard text data."""
 
@@ -55,21 +85,22 @@ class ClipboardData:
         content: str,
         metadata: dict[str, Any] | None = None,
     ):
-        self.content = content
-        self.size = len(content.encode("utf-8"))
+        self.raw_content = content
+        self.content = normalize_text(content)
+        self.size = len(self.content.encode("utf-8"))
         self.metadata = metadata or {}
         self.timestamp = time.time()
         self.hash = self._calculate_hash()
 
     def _calculate_hash(self) -> str:
-        """Calculate hash of the content for deduplication."""
+        """Calculate hash of the normalized content for deduplication."""
         content_bytes = self.content.encode("utf-8")
         return hashlib.sha256(content_bytes).hexdigest()[:16]
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
-            "content": self.content,
+            "content": self.raw_content,  # Send raw content to preserve original formatting
             "size": self.size,
             "metadata": self.metadata,
             "timestamp": self.timestamp,
@@ -83,6 +114,23 @@ class ClipboardData:
         obj.timestamp = data["timestamp"]
         obj.hash = data["hash"]
         return obj
+
+    def is_equivalent_to(self, other: ClipboardData) -> bool:
+        """Check if this clipboard data is equivalent to another."""
+        return self.hash == other.hash
+
+    def is_different_from_current_clipboard(self) -> bool:
+        """Check if this content is different from what's currently in the clipboard."""
+        try:
+            current_content = pyperclip.paste()
+            if not current_content:
+                return bool(self.content)  # If clipboard is empty but we have content
+
+            current_normalized = normalize_text(current_content)
+            return current_normalized != self.content
+        except Exception as e:
+            logger.debug("Error comparing with current clipboard: %s", str(e))
+            return True  # Assume different if we can't compare
 
 
 class ClipboardMonitor:
@@ -190,69 +238,79 @@ class ClipboardServer:
 
     def _setup_routes(self) -> None:
         """Setup Flask routes."""
+        self.app.route("/clipboard", methods=["POST"])(self._handle_clipboard_update)
+        self.app.route("/health", methods=["GET"])(self._handle_health_check)
+        self.app.route("/discover", methods=["GET"])(self._handle_discover)
+        self.app.route("/shutdown", methods=["POST"])(self._handle_shutdown)
 
-        @self.app.route("/clipboard", methods=["POST"])
-        def receive_clipboard() -> tuple[Response, int]:  # type: ignore[reportUnusedFunction]
-            try:
-                data = request.get_json()
-                if not data:
-                    return jsonify({"error": "No data provided"}), 400
+    def _handle_clipboard_update(self) -> tuple[Response, int]:
+        """Handle clipboard update requests."""
+        try:
+            data = request.get_json()
+            if not data:
+                return jsonify({"error": "No data provided"}), 400
 
-                clipboard_data = ClipboardData.from_dict(data)
+            clipboard_data = ClipboardData.from_dict(data)
+            remote_addr = request.remote_addr or "unknown"
+            self._process_clipboard_update(clipboard_data, remote_addr)
+            return jsonify({"status": "success"}), 200
 
-                with self.update_lock:  # Avoid setting clipboard if it's already what we just sent
-                    if clipboard_data.hash != self.last_received_hash:
-                        self._set_clipboard(clipboard_data)
-                        self.last_received_hash = clipboard_data.hash
-                        logger.info(
-                            "Clipboard updated from %s: %s bytes.",
-                            request.remote_addr,
-                            clipboard_data.size,
-                        )
-                    else:
-                        logger.debug("Ignoring duplicate clipboard update")
+        except Exception as e:
+            logger.error("Error processing clipboard update: %s", str(e))
+            return jsonify({"error": str(e)}), 500
 
-                return jsonify({"status": "success"}), 200
+    def _process_clipboard_update(self, clipboard_data: ClipboardData, remote_addr: str) -> None:
+        """Process a clipboard update with deduplication logic."""
+        with self.update_lock:
+            if clipboard_data.hash != self.last_received_hash:
+                if clipboard_data.is_different_from_current_clipboard():
+                    self._set_clipboard(clipboard_data)
+                    self.last_received_hash = clipboard_data.hash
+                    logger.info(
+                        "Clipboard updated from %s: %s bytes.",
+                        remote_addr,
+                        clipboard_data.size,
+                    )
+                else:
+                    logger.debug("Ignoring update; content is already in clipboard.")
+                    # Still update the hash to avoid repeated checks
+                    self.last_received_hash = clipboard_data.hash
+            else:
+                logger.debug("Ignoring duplicate clipboard update")
 
-            except Exception as e:
-                logger.error("Error processing clipboard update: %s", str(e))
-                return jsonify({"error": str(e)}), 500
+    def _handle_health_check(self) -> tuple[Response, int]:
+        """Handle health check requests."""
+        reported_platform = platform.system()
+        if reported_platform == "Darwin":
+            reported_platform = "macOS"
+        return jsonify({"status": "healthy", "platform": reported_platform}), 200
 
-        @self.app.route("/health", methods=["GET"])
-        def health_check() -> tuple[Response, int]:  # type: ignore[reportUnusedFunction]
-            reported_platform = platform.system()
-            if reported_platform == "Darwin":
-                reported_platform = "macOS"
-            return jsonify({"status": "healthy", "platform": reported_platform}), 200
+    def _handle_discover(self) -> tuple[Response, int]:
+        """Handle discovery requests."""
+        return jsonify({
+            "status": "available",
+            "platform": platform.system(),
+            "hostname": socket.gethostname(),
+            "port": self.port,
+            "device_id": get_device_id(),
+        }), 200
 
-        @self.app.route("/discover", methods=["GET"])
-        def discover() -> tuple[Response, int]:  # type: ignore[reportUnusedFunction]
-            """Endpoint for network discovery."""
-            return jsonify({
-                "status": "available",
-                "platform": platform.system(),
-                "hostname": socket.gethostname(),
-                "port": self.port,
-                "device_id": get_device_id(),
-            }), 200
+    def _handle_shutdown(self) -> tuple[Response, int]:
+        """Handle shutdown requests."""
 
-        @self.app.route("/shutdown", methods=["POST"])
-        def shutdown_server() -> tuple[Response, int]:  # type: ignore[reportUnusedFunction]
-            """Endpoint to shutdown the server gracefully."""
+        def shutdown_server_internal():
+            time.sleep(0.5)  # Give time for response to be sent
+            self.shutdown_event.set()  # Signal shutdown to main thread
 
-            def shutdown_server_internal():
-                time.sleep(0.5)  # Give time for response to be sent
-                self.shutdown_event.set()  # Signal shutdown to main thread
-
-            # Start shutdown in a separate thread to allow response to be sent
-            shutdown_thread = threading.Thread(target=shutdown_server_internal, daemon=True)
-            shutdown_thread.start()
-            return jsonify({"status": "shutting down"}), 200
+        # Start shutdown in a separate thread to allow response to be sent
+        shutdown_thread = threading.Thread(target=shutdown_server_internal, daemon=True)
+        shutdown_thread.start()
+        return jsonify({"status": "shutting down"}), 200
 
     def _set_clipboard(self, clipboard_data: ClipboardData) -> None:
         """Set the local clipboard content."""
-        try:
-            pyperclip.copy(clipboard_data.content)
+        try:  # Use the raw content to preserve original formatting
+            pyperclip.copy(clipboard_data.raw_content)
         except Exception as e:
             logger.error("Error setting clipboard: %s", str(e))
 
