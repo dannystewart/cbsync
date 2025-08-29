@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Cross-platform cbsynchronization application.
+"""Cross-platform clipboard synchronization application.
 
 This application shares clipboard text content between devices on the same network. It runs a server
 to receive updates and a client to send updates when the local clipboard changes.
