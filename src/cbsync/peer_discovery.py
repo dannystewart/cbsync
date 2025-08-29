@@ -57,6 +57,8 @@ class PeerDiscoveryManager:
         self.discovery_thread: threading.Thread | None = None
         self.logger: Logger = PolyLog.get_logger()
         self.last_discovery_time: float = 0
+        self.seen_devices: set[str] = set()
+        self.seen_devices_lock: threading.Lock = threading.Lock()
 
     @staticmethod
     def get_device_id() -> str:
@@ -91,19 +93,13 @@ class PeerDiscoveryManager:
     def _discover_peers_once(self) -> list[str]:
         """Perform a single peer discovery scan."""
         discovered_peers = []
-        seen_devices = set()
 
         if not (network_prefix := self.get_network_prefix(self.interface_ip)):
             return discovered_peers
 
         self.logger.debug("Scanning network %s* for cbsync instances...", network_prefix)
         self._scan_network_range(
-            network_prefix,
-            self.port,
-            self.timeout,
-            discovered_peers,
-            seen_devices,
-            self.our_device_id,
+            network_prefix, self.port, self.timeout, discovered_peers, self.our_device_id
         )
 
         return discovered_peers
@@ -141,7 +137,7 @@ class PeerDiscoveryManager:
                     for peer in discovered_peers:
                         if peer not in self.peers:
                             self.peers.append(peer)
-                            self.logger.info("Discovered new peer: %s", peer)
+                            self.logger.debug("Discovered new peer: %s", peer)
                             new_peers_added += 1
 
                     if new_peers_added == 0 and discovered_peers:
@@ -193,13 +189,7 @@ class PeerDiscoveryManager:
         return PeerDiscoveryManager._get_preferred_interface(interfaces)
 
     def _scan_network_range(
-        self,
-        network_prefix: str,
-        port: int,
-        timeout: float,
-        peers: list[str],
-        seen_devices: set[str],
-        our_device_id: str,
+        self, network_prefix: str, port: int, timeout: float, peers: list[str], our_device_id: str
     ) -> None:
         """Scan a network range for cbsync instances."""
         threads = []
@@ -207,7 +197,7 @@ class PeerDiscoveryManager:
             ip = f"{network_prefix}{i}"
             thread = threading.Thread(
                 target=self._check_host_for_cbsync,
-                args=(ip, port, timeout, peers, seen_devices, our_device_id),
+                args=(ip, port, timeout, peers, our_device_id),
                 daemon=True,
             )
             threads.append(thread)
@@ -224,13 +214,7 @@ class PeerDiscoveryManager:
             thread.join(timeout=0.1)
 
     def _check_host_for_cbsync(
-        self,
-        ip: str,
-        port: int,
-        timeout: float,
-        peers: list[str],
-        seen_devices: set[str],
-        our_device_id: str,
+        self, ip: str, port: int, timeout: float, peers: list[str], our_device_id: str
     ) -> None:
         """Check if a specific IP is running cbsync."""
         try:
@@ -245,11 +229,18 @@ class PeerDiscoveryManager:
                         self.logger.debug("Skipping our own device: %s", device_id)
                         return
 
-                    # Only add if we haven't seen this device before
-                    if device_id not in seen_devices:
-                        seen_devices.add(device_id)
-                        peers.append(ip)
-                        self.logger.info("Found peer: %s (%s)", ip, data.get("hostname", "unknown"))
+                    # Check if we've seen this device before
+                    with self.seen_devices_lock:
+                        if device_id not in self.seen_devices:
+                            self.seen_devices.add(device_id)
+                            peers.append(ip)
+                            self.logger.info(
+                                "Found peer: %s (%s)", ip, data.get("hostname", "unknown")
+                            )
+                        else:
+                            self.logger.debug(
+                                "Already seen peer: %s (%s)", ip, data.get("hostname", "unknown")
+                            )
         except Exception:
             pass  # Host not reachable or not running cbsync
 
