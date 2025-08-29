@@ -409,10 +409,9 @@ icu = ["PyICU (>=1.0.0)"]
 name = "netifaces"
 version = "0.11.0"
 description = "Portable network interface information."
-optional = true
+optional = false
 python-versions = "*"
-groups = ["main"]
-markers = "extra == \"enhanced-network\""
+groups = ["main", "enhanced-network"]
 files = [
     {file = "netifaces-0.11.0-cp27-cp27m-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:eb4813b77d5df99903af4757ce980a98c4d702bbcb81f32a0b305a1537bdf0b1"},
     {file = "netifaces-0.11.0-cp27-cp27m-manylinux_2_5_x86_64.manylinux1_x86_64.whl", hash = "sha256:5f9ca13babe4d845e400921973f6165a4c2f9f3379c7abfc7478160e25d196a4"},
@@ -743,4 +742,4 @@ enhanced-network = ["netifaces"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13"
-content-hash = "685621cb90faf4b144b444862cabc18e91da294558ec664705e052854921420f"
+content-hash = "9f60fafa2ba2c7135876f08e81bac0fa27d27319a604f3453f54d535aa6fed68"

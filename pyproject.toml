@@ -17,6 +17,9 @@ dependencies = [
 [project.optional-dependencies]
 enhanced-network = ["netifaces (>=0.11.0,<1.0.0)"]
 
+[tool.poetry.group.enhanced-network.dependencies]
+netifaces = "^0.11.0"
+
 [tool.poetry.group.dev.dependencies]
 ruff = "^0.12.10"
 mypy = "^1.17.1"
