@@ -32,12 +32,14 @@ class ClipboardSyncApp:
         max_size_mb: int = 10,
         interface_ip: str | None = None,
         discovery_interval: int = 10,
+        health_check_interval: int = 10,
         enable_discovery: bool = True,
     ):
         self.port = port
         self.max_size_mb = max_size_mb
         self.interface_ip = interface_ip
         self.discovery_interval = discovery_interval
+        self.health_check_interval = health_check_interval
         self.enable_discovery = enable_discovery
         self.shutdown_event = threading.Event()
 
@@ -58,7 +60,7 @@ class ClipboardSyncApp:
         # Start peer discovery if enabled
         if self.enable_discovery:
             self.discovery_manager = PeerDiscoveryManager(
-                self.port, self.interface_ip, self.discovery_interval
+                self.port, self.interface_ip, self.discovery_interval, self.health_check_interval
             )
             self.discovery_manager.start(self.shutdown_event)
 
@@ -145,7 +147,13 @@ def main():
         "--discovery-interval",
         type=int,
         default=10,
-        help="peer discovery interval in seconds (default: 10)",
+        help="peer discovery interval in seconds (default: 30)",
+    )
+    parser.add_argument(
+        "--health-check-interval",
+        type=int,
+        default=10,
+        help="peer health check interval in seconds (default: 10)",
     )
     parser.add_argument(
         "--no-discovery",
@@ -161,6 +169,7 @@ def main():
         max_size_mb=args.max_size,
         interface_ip=args.interface,
         discovery_interval=args.discovery_interval,
+        health_check_interval=args.health_check_interval,
         enable_discovery=not args.no_discovery,
     )
 

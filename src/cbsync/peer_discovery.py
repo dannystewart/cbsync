@@ -21,11 +21,13 @@ class PeerDiscoveryManager:
         port: int,
         interface_ip: str | None = None,
         discovery_interval: int = 10,
+        health_check_interval: int = 10,
         timeout: float = 2.0,
     ):
         self.port: int = port
         self.interface_ip: str | None = interface_ip
         self.discovery_interval: int = discovery_interval
+        self.health_check_interval: int = health_check_interval
         self.timeout: float = timeout
         self.running: bool = False
         self.peers: list[str] = []
@@ -33,6 +35,7 @@ class PeerDiscoveryManager:
         self.our_device_id: str = get_device_id()
         self.discovery_thread: threading.Thread | None = None
         self.logger: Logger = PolyLog.get_logger()
+        self.last_discovery_time: float = 0
 
     def get_peers(self) -> list[str]:
         """Get a copy of the current peer list."""
@@ -79,42 +82,54 @@ class PeerDiscoveryManager:
 
     def _discovery_loop(self, shutdown_event: threading.Event) -> None:
         """Main discovery loop that runs continuously."""
-        self.logger.info("Starting peer discovery (interval: %d seconds)", self.discovery_interval)
+        self.logger.info(
+            "Starting peer discovery (discovery: %ds, health check: %ds)",
+            self.discovery_interval,
+            self.health_check_interval,
+        )
 
         while self.running and not shutdown_event.is_set():
-            try:
-                # Perform discovery
-                new_peers = self._discover_peers_once()
+            self._health_check_loop()
 
-                # Update our peer list
+            # Wait for next cycle (health check interval)
+            for _ in range(self.health_check_interval * 10):  # Check 10 times per second
+                if shutdown_event.is_set():
+                    break
+                time.sleep(0.1)
+
+    def _health_check_loop(self) -> None:
+        try:
+            current_time = time.time()
+
+            # Perform full discovery scan periodically
+            if current_time - self.last_discovery_time >= self.discovery_interval:
+                self.logger.debug("Performing full network discovery scan...")
+                new_peers = self._discover_peers_once()
+                self.last_discovery_time = current_time
+
+                # Add new peers
                 with self.peers_lock:
-                    # Add new peers
                     for peer in new_peers:
                         if peer not in self.peers:
                             self.peers.append(peer)
                             self.logger.info("Discovered new peer: %s", peer)
 
-                    # Remove peers that are no longer responding
-                    current_peers = self.peers.copy()
-                    for peer in current_peers:
-                        if not self._is_peer_alive(peer):
-                            self.peers.remove(peer)
-                            self.logger.info("Peer no longer responding: %s", peer)
+            # Always perform health checks on existing peers
+            with self.peers_lock:
+                current_peers = self.peers.copy()
 
-                # Log current peer count
-                with self.peers_lock:
-                    peer_count = len(self.peers)
-                if peer_count > 0:
-                    self.logger.debug("Current peers: %d", peer_count)
+            for peer in current_peers:
+                if not self._is_peer_alive(peer):
+                    self.remove_peer(peer)
 
-            except Exception as e:
-                self.logger.error("Error in peer discovery: %s", str(e))
+            # Log current peer count
+            with self.peers_lock:
+                peer_count = len(self.peers)
+            if peer_count > 0:
+                self.logger.debug("Current peers: %d", peer_count)
 
-            # Wait for next discovery cycle or shutdown
-            for _ in range(self.discovery_interval * 10):  # Check 10 times per second
-                if shutdown_event.is_set():
-                    break
-                time.sleep(0.1)
+        except Exception as e:
+            self.logger.error("Error in peer discovery: %s", str(e))
 
     def _is_peer_alive(self, peer: str) -> bool:
         """Check if a peer is still responding."""
