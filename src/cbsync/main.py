@@ -16,7 +16,6 @@ from polykit.cli import handle_interrupt
 
 from cbsync.clipboard_monitor import ClipboardMonitor
 from cbsync.clipboard_server import ClipboardServer
-from cbsync.net_utils import get_current_ip
 from cbsync.peer_discovery import PeerDiscoveryManager
 
 logger = PolyLog.get_logger()
@@ -93,7 +92,7 @@ class ClipboardSyncApp:
         self.start()
 
         # Log current IP address for easy peer configuration
-        current_ip = get_current_ip()
+        current_ip = PeerDiscoveryManager.get_current_ip()
         if current_ip:
             logger.info("This device's IP address: %s (port %s)", current_ip, self.port)
             logger.info("Other devices can connect using: --peers %s", current_ip)
@@ -102,7 +101,7 @@ class ClipboardSyncApp:
 
         logger.info("cbsync is running. Press Ctrl+C to stop.")
         if self.enable_discovery:
-            logger.info("Peer discovery enabled (interval: %d seconds)", self.discovery_interval)
+            logger.debug("Peer discovery enabled (interval: %d seconds)", self.discovery_interval)
 
         # Keep the main thread alive
         try:

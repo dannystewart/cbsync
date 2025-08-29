@@ -12,7 +12,7 @@ from flask import Flask, Response, jsonify, request
 from polykit import PolyLog
 
 from cbsync.clipboard_data import ClipboardData
-from cbsync.net_utils import get_device_id
+from cbsync.peer_discovery import PeerDiscoveryManager
 
 if TYPE_CHECKING:
     from logging import Logger
@@ -91,7 +91,7 @@ class ClipboardServer:
             "platform": platform.system(),
             "hostname": socket.gethostname(),
             "port": self.port,
-            "device_id": get_device_id(),
+            "device_id": PeerDiscoveryManager.get_device_id(),
         }), 200
 
     def _handle_shutdown(self) -> tuple[Response, int]:
