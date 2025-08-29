@@ -1,6 +1,6 @@
 [project]
 name = "cbsync"
-version = "0.1.0"
+version = "0.2.0"
 description = "Clipboard sync between devices"
 authors = [
     {name = "Danny Stewart",email = "danny@stewart.cc"}
@@ -29,5 +29,5 @@ requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [project.scripts]
-cbsync = "cbsync.cbsync:main"
+cbsync = "cbsync.main:main"
 cbsman = "cbsync.cbsync_manager:main"

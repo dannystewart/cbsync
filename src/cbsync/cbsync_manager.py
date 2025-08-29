@@ -61,7 +61,7 @@ def start(args: list[str] | None = None) -> None:
     print("Starting cbsync...")
 
     # Start the application (no need for --server-only, it runs normally by default)
-    cmd = ["python", "src/cbsync/cbsync.py", *args]
+    cmd = ["python", "src/cbsync/main.py", *args]
 
     with Path(LOG_FILE).open("w", encoding="utf-8") as log_file:
         process = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT, text=True)
