@@ -104,7 +104,7 @@ def get_local_network_prefix() -> str | None:
         logger.warning("No valid network interface found.")
         return None
 
-    logger.info("Using network interface: %s", preferred_ip)
+    logger.debug("Using network interface: %s", preferred_ip)
     network_parts = preferred_ip.split(".")
     return ".".join(network_parts[:3]) + "."
 
@@ -129,7 +129,7 @@ def _check_host_for_cbsync(
                 if device_id not in seen_devices:
                     seen_devices.add(device_id)
                     peers.append(ip)
-                    logger.info("Found peer: %s (%s)", ip, data.get("hostname", "unknown"))
+                    logger.debug("Found peer: %s (%s)", ip, data.get("hostname", "unknown"))
     except Exception:
         pass  # Host not reachable or not running cbsync
 

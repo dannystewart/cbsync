@@ -82,7 +82,7 @@ class PeerDiscoveryManager:
 
     def _discovery_loop(self, shutdown_event: threading.Event) -> None:
         """Main discovery loop that runs continuously."""
-        self.logger.info(
+        self.logger.debug(
             "Starting peer discovery (discovery: %ds, health check: %ds)",
             self.discovery_interval,
             self.health_check_interval,
@@ -104,15 +104,31 @@ class PeerDiscoveryManager:
             # Perform full discovery scan periodically
             if current_time - self.last_discovery_time >= self.discovery_interval:
                 self.logger.debug("Performing full network discovery scan...")
-                new_peers = self._discover_peers_once()
+                discovered_peers = self._discover_peers_once()
                 self.last_discovery_time = current_time
 
-                # Add new peers
+                # Add only truly new peers
                 with self.peers_lock:
-                    for peer in new_peers:
+                    new_peers_added = 0
+                    for peer in discovered_peers:
                         if peer not in self.peers:
                             self.peers.append(peer)
                             self.logger.info("Discovered new peer: %s", peer)
+                            new_peers_added += 1
+
+                    if new_peers_added == 0 and discovered_peers:
+                        self.logger.debug(
+                            "No new peers found (already know %d peer%s)",
+                            len(discovered_peers),
+                            "s" if len(discovered_peers) > 1 else "",
+                        )
+                    elif new_peers_added > 0:
+                        self.logger.info(
+                            "Added %d new peer%s, total peers: %d",
+                            new_peers_added,
+                            "s" if new_peers_added > 1 else "",
+                            len(self.peers),
+                        )
 
             # Always perform health checks on existing peers
             with self.peers_lock:
@@ -146,11 +162,11 @@ class PeerDiscoveryManager:
             target=self._discovery_loop, args=(shutdown_event,), daemon=True
         )
         self.discovery_thread.start()
-        self.logger.info("Peer discovery manager started.")
+        self.logger.debug("Peer discovery manager started.")
 
     def stop(self) -> None:
         """Stop the discovery manager."""
         self.running = False
         if self.discovery_thread and self.discovery_thread.is_alive():
             self.discovery_thread.join(timeout=2)
-        self.logger.info("Peer discovery manager stopped.")
+        self.logger.debug("Peer discovery manager stopped.")

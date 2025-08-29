@@ -78,7 +78,7 @@ class ClipboardMonitor:
 
     def monitor_clipboard(self, shutdown_event: threading.Event) -> None:
         """Monitor clipboard for changes and send updates."""
-        self.logger.info("Starting clipboard monitoring...")
+        self.logger.debug("Starting clipboard monitoring...")
 
         while self.running and not shutdown_event.is_set():
             try:
@@ -111,9 +111,9 @@ class ClipboardMonitor:
             target=self.monitor_clipboard, args=(shutdown_event,), daemon=True
         )
         monitor_thread.start()
-        self.logger.info("Clipboard monitor started.")
+        self.logger.debug("Clipboard monitor started.")
 
     def stop(self) -> None:
         """Stop clipboard monitoring."""
         self.running = False
-        self.logger.info("Clipboard monitor stopped.")
+        self.logger.debug("Clipboard monitor stopped.")

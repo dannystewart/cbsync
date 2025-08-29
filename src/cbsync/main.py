@@ -8,7 +8,6 @@ to receive updates and a client to send updates when the local clipboard changes
 
 from __future__ import annotations
 
-import platform
 import threading
 import time
 
@@ -96,17 +95,12 @@ class ClipboardSyncApp:
         # Log current IP address for easy peer configuration
         current_ip = get_current_ip()
         if current_ip:
-            logger.info("This device's IP address: %s", current_ip)
+            logger.info("This device's IP address: %s (port %s)", current_ip, self.port)
             logger.info("Other devices can connect using: --peers %s", current_ip)
         else:
             logger.warning("Could not determine this device's IP address")
 
         logger.info("cbsync is running. Press Ctrl+C to stop.")
-        reported_platform = platform.system()
-        if reported_platform == "Darwin":
-            reported_platform = "macOS"
-        logger.info("Platform: %s", reported_platform)
-        logger.info("Server port: %s", self.port)
         if self.enable_discovery:
             logger.info("Peer discovery enabled (interval: %d seconds)", self.discovery_interval)
 
