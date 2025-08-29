@@ -60,7 +60,12 @@ class ClipboardMonitor:
             self.logger.debug("No peers available to send clipboard update")
             return
 
-        self.logger.info("Sending clipboard update to %d peers: %s", len(peers), peers)
+        self.logger.info(
+            "Sending clipboard update to %d peer%s: %s",
+            len(peers),
+            "s" if len(peers) > 1 else "",
+            peers,
+        )
 
         for peer in peers:
             try:
@@ -70,7 +75,7 @@ class ClipboardMonitor:
                     url, json=data, headers={"Content-Type": "application/json"}
                 )
                 if response.status_code == 200:
-                    self.logger.info("Successfully sent clipboard to %s.", peer)
+                    self.logger.debug("Successfully sent clipboard to %s.", peer)
                 else:
                     self.logger.warning("Failed to send to %s: %s", peer, response.status_code)
             except requests.exceptions.RequestException as e:
