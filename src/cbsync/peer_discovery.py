@@ -169,7 +169,7 @@ class PeerDiscoveryManager:
                 self.logger.debug("Current peers: %d", peer_count)
 
         except Exception as e:
-            self.logger.error("Error in peer discovery: %s", str(e))
+            self.logger.error("Error in peer discovery: %s", e)
 
     def _is_peer_alive(self, peer: str) -> bool:
         """Check if a peer is still responding."""

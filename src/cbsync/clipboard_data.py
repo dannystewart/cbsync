@@ -59,5 +59,5 @@ class ClipboardData:
             current_normalized = Text.normalize(current_content)
             return current_normalized != self.content
         except Exception as e:
-            logger.debug("Error comparing with current clipboard: %s", str(e))
+            logger.debug("Error comparing with current clipboard: %s", e)
             return True  # Assume different if we can't compare

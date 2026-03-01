@@ -45,7 +45,7 @@ class ClipboardMonitor:
                 self.logger.warning("Clipboard text too large: %s bytes.", len(content_bytes))
 
         except Exception as e:
-            self.logger.error("Error reading clipboard: %s", str(e))
+            self.logger.error("Error reading clipboard: %s", e)
 
         return None
 
@@ -79,7 +79,7 @@ class ClipboardMonitor:
                 else:
                     self.logger.warning("Failed to send to %s: %s", peer, response.status_code)
             except requests.exceptions.RequestException as e:
-                self.logger.warning("Could not reach peer %s: %s", peer, str(e))
+                self.logger.warning("Could not reach peer %s: %s", peer, e)
 
     def monitor_clipboard(self, shutdown_event: threading.Event) -> None:
         """Monitor clipboard for changes and send updates."""
@@ -106,7 +106,7 @@ class ClipboardMonitor:
                     time.sleep(0.05)
 
             except Exception as e:
-                self.logger.error("Error in clipboard monitoring: %s", str(e))
+                self.logger.error("Error in clipboard monitoring: %s", e)
                 time.sleep(1)
 
     def start(self, shutdown_event: threading.Event) -> None:

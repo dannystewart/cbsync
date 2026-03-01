@@ -55,7 +55,7 @@ class ClipboardServer:
             return jsonify({"status": "success"}), 200
 
         except Exception as e:
-            self.logger.error("Error processing clipboard update: %s", str(e))
+            self.logger.error("Error processing clipboard update: %s", e)
             return jsonify({"error": str(e)}), 500
 
     def _process_clipboard_update(self, clipboard_data: ClipboardData, remote_addr: str) -> None:
@@ -111,7 +111,7 @@ class ClipboardServer:
         try:  # Use the raw content to preserve original formatting
             pyperclip.copy(clipboard_data.raw_content)
         except Exception as e:
-            self.logger.error("Error setting clipboard: %s", str(e))
+            self.logger.error("Error setting clipboard: %s", e)
 
     def run(self) -> None:
         """Start the Flask server."""
@@ -120,7 +120,7 @@ class ClipboardServer:
             self.app.run(host="0.0.0.0", port=self.port, debug=False, threaded=True)
         except Exception as e:
             if not self.shutdown_event.is_set():
-                self.logger.error("Flask server error: %s", str(e))
+                self.logger.error("Flask server error: %s", e)
 
     def start(self) -> None:
         """Start the server in a background thread."""
