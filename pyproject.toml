@@ -1,6 +1,6 @@
 [project]
 name = "cbsync"
-version = "0.2.0"
+version = "0.3.0"
 description = "Clipboard sync between devices"
 authors = [
     {name = "Danny Stewart",email = "danny@stewart.cc"}
