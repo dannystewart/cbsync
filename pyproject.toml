@@ -12,6 +12,9 @@ dependencies = [
     "polykit (>=0.14.6,<0.15.0)",
     "pyperclip (>=1.11.0,<2.0.0)",
     "requests (>=2.32.5,<3.0.0)",
+    "pillow (>=12.1.1,<13.0.0)",
+    "pyobjc-framework-cocoa (>=12.1,<13.0) ; platform_system == \"Darwin\"",
+    "pywin32 (>=311,<312) ; platform_system == \"Windows\"",
 ]
 
 [project.optional-dependencies]

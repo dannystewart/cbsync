@@ -4,15 +4,15 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
-import pyperclip
 import requests
 from polykit import PolyLog
 
-from cbsync.clipboard_data import ClipboardData
+from cbsync.clipboard_backend import read_preferred
 
 if TYPE_CHECKING:
     from logging import Logger
 
+    from cbsync.clipboard_data import ClipboardData
     from cbsync.peer_discovery import PeerDiscoveryManager
 
 
@@ -35,15 +35,11 @@ class ClipboardMonitor:
         self.logger: Logger = PolyLog.get_logger()
 
     def get_clipboard_content(self) -> ClipboardData | None:
-        """Get current clipboard text content."""
+        """Get current clipboard content (prefer image)."""
         try:
-            text_content = pyperclip.paste()
-            if text_content:
-                content_bytes = text_content.encode("utf-8")
-                if len(content_bytes) <= self.max_size_bytes:
-                    return ClipboardData(text_content)
-                self.logger.warning("Clipboard text too large: %s bytes.", len(content_bytes))
-
+            item = read_preferred(max_size_bytes=self.max_size_bytes, prefer_image=True)
+            if item:
+                return item
         except Exception as e:
             self.logger.error("Error reading clipboard: %s", e)
 
@@ -93,8 +89,9 @@ class ClipboardMonitor:
                     with self.update_lock:  # Double-check after acquiring lock
                         if clipboard_data.hash != self.last_clipboard_hash:
                             self.logger.debug(
-                                "Local clipboard changed: %s bytes.",
-                                clipboard_data.size,
+                                "Local clipboard changed (%s): %s bytes.",
+                                clipboard_data.kind,
+                                clipboard_data.size_bytes,
                             )
                             self.send_to_peers(clipboard_data)
                             self.last_clipboard_hash = clipboard_data.hash

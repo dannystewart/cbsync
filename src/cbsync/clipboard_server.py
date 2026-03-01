@@ -7,10 +7,10 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
-import pyperclip
 from flask import Flask, Response, jsonify, request
 from polykit import PolyLog
 
+from cbsync.clipboard_backend import write
 from cbsync.clipboard_data import ClipboardData
 from cbsync.peer_discovery import PeerDiscoveryManager
 
@@ -21,9 +21,10 @@ if TYPE_CHECKING:
 class ClipboardServer:
     """Flask server to receive clipboard updates from other devices."""
 
-    def __init__(self, port: int, shutdown_event: threading.Event):
+    def __init__(self, port: int, shutdown_event: threading.Event, max_size_mb: int = 10):
         self.port: int = port
         self.shutdown_event: threading.Event = shutdown_event
+        self.max_size_bytes: int = max_size_mb * 1024 * 1024
         self.app: Flask = Flask(__name__)
         self.last_received_hash: str | None = None
         self.update_lock: threading.Lock = threading.Lock()
@@ -62,13 +63,26 @@ class ClipboardServer:
         """Process a clipboard update with deduplication logic."""
         with self.update_lock:
             if clipboard_data.hash != self.last_received_hash:
-                if clipboard_data.is_different_from_current_clipboard():
+                if clipboard_data.size_bytes > self.max_size_bytes:
+                    self.logger.warning(
+                        "Ignoring oversized clipboard update from %s (%s): %s bytes.",
+                        remote_addr,
+                        clipboard_data.kind,
+                        clipboard_data.size_bytes,
+                    )
+                    self.last_received_hash = clipboard_data.hash
+                    return
+
+                if clipboard_data.is_different_from_current_clipboard(
+                    max_size_bytes=self.max_size_bytes
+                ):
                     self._set_clipboard(clipboard_data)
                     self.last_received_hash = clipboard_data.hash
                     self.logger.info(
-                        "Clipboard updated from %s: %s bytes.",
+                        "Clipboard updated from %s (%s): %s bytes.",
                         remote_addr,
-                        clipboard_data.size,
+                        clipboard_data.kind,
+                        clipboard_data.size_bytes,
                     )
                 else:
                     self.logger.debug("Ignoring update; content is already in clipboard.")
@@ -109,7 +123,7 @@ class ClipboardServer:
     def _set_clipboard(self, clipboard_data: ClipboardData) -> None:
         """Set the local clipboard content."""
         try:  # Use the raw content to preserve original formatting
-            pyperclip.copy(clipboard_data.raw_content)
+            write(clipboard_data)
         except Exception as e:
             self.logger.error("Error setting clipboard: %s", e)
 

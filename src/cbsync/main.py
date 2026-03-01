@@ -18,7 +18,7 @@ from cbsync.clipboard_monitor import ClipboardMonitor
 from cbsync.clipboard_server import ClipboardServer
 from cbsync.peer_discovery import PeerDiscoveryManager
 
-logger = PolyLog.get_logger()
+logger = PolyLog.get_logger(level="debug")
 
 
 class ClipboardSyncApp:
@@ -49,7 +49,7 @@ class ClipboardSyncApp:
     def start(self) -> None:
         """Start the application."""
         # Start the server first so other devices can discover us
-        self.server = ClipboardServer(self.port, self.shutdown_event)
+        self.server = ClipboardServer(self.port, self.shutdown_event, max_size_mb=self.max_size_mb)
         self.server.start()
 
         # Give the server a moment to start

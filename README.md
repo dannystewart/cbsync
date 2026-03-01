@@ -1,6 +1,6 @@
 # cbsync: Cross-Platform Clipboard Sync
 
-A simple Python application that synchronizes clipboard text content between devices on the same network.
+A simple Python application that synchronizes clipboard **text and images** between devices on the same network.
 
 ## Features
 
@@ -8,6 +8,7 @@ A simple Python application that synchronizes clipboard text content between dev
 - **Cross-platform**: Works on Windows, macOS, and Linux
 - **Network discovery**: Automatically find other clipboard sync instances on your network
 - **Size limits**: Configurable maximum clipboard size (default: 10MB)
+- **Image sync (macOS + Windows)**: Copies screenshots and small images (sent as PNG)
 - **Network-based**: Uses HTTP for communication between devices
 - **Deduplication**: Prevents infinite loops and duplicate updates
 
