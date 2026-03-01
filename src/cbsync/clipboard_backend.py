@@ -87,11 +87,14 @@ def _mac_read_image(*, max_size_bytes: int | None) -> ClipboardData | None:
         return None
 
     try:
-        pb = AppKit.NSPasteboard.generalPasteboard()
+        appkit = AppKit  # type: ignore
+        appkit_any: Any = appkit
+
+        pb = appkit_any.NSPasteboard.generalPasteboard()
         types = set(pb.types() or [])
 
-        png_type = getattr(AppKit, "NSPasteboardTypePNG", "public.png")
-        tiff_type = getattr(AppKit, "NSPasteboardTypeTIFF", "public.tiff")
+        png_type = getattr(appkit_any, "NSPasteboardTypePNG", "public.png")
+        tiff_type = getattr(appkit_any, "NSPasteboardTypeTIFF", "public.tiff")
 
         if png_type in types:
             return _mac_read_image_for_type(
@@ -147,12 +150,42 @@ def _mac_write_image_png(png_bytes: bytes) -> None:
         return
 
     try:
-        pb = AppKit.NSPasteboard.generalPasteboard()
+        if not png_bytes:
+            return
+
+        appkit = AppKit  # type: ignore
+        foundation = Foundation  # type: ignore
+        appkit_any: Any = appkit
+        foundation_any: Any = foundation
+
+        pb = appkit_any.NSPasteboard.generalPasteboard()
         pb.clearContents()
 
-        png_type = getattr(AppKit, "NSPasteboardTypePNG", "public.png")
-        nsdata = Foundation.NSData.dataWithBytes_length_(png_bytes, len(png_bytes))
-        pb.setData_forType_(nsdata, png_type)
+        png_type = getattr(appkit_any, "NSPasteboardTypePNG", "public.png")
+        tiff_type = getattr(appkit_any, "NSPasteboardTypeTIFF", "public.tiff")
+        legacy_tiff_type = getattr(appkit_any, "NSTIFFPboardType", None)
+
+        nsdata_png = foundation_any.NSData.dataWithBytes_length_(png_bytes, len(png_bytes))
+
+        nsimage = appkit_any.NSImage.alloc().initWithData_(nsdata_png)
+        tiff_data = None
+        if nsimage is not None:
+            try:
+                tiff_data = nsimage.TIFFRepresentation()
+            except Exception:
+                tiff_data = None
+
+        declared_types: list[str] = [png_type, tiff_type]
+        if legacy_tiff_type:
+            declared_types.append(legacy_tiff_type)
+        pb.declareTypes_owner_(declared_types, None)
+
+        pb.setData_forType_(nsdata_png, png_type)
+        if tiff_data is not None:
+            pb.setData_forType_(tiff_data, tiff_type)
+            if legacy_tiff_type:
+                pb.setData_forType_(tiff_data, legacy_tiff_type)
+
         logger.debug("Wrote macOS clipboard image: %s bytes.", len(png_bytes))
     except Exception as e:
         logger.error("Error writing macOS image clipboard: %s", e)
