@@ -23,7 +23,7 @@ class ClipboardMonitor:
         self,
         server_port: int,
         discovery_manager: PeerDiscoveryManager | None,
-        max_size_mb: int = 10,
+        max_size_mb: int = 15,
     ):
         self.server_port: int = server_port
         self.discovery_manager: PeerDiscoveryManager | None = discovery_manager
