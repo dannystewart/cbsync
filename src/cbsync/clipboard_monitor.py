@@ -33,6 +33,13 @@ class ClipboardMonitor:
         self.update_lock: threading.Lock = threading.Lock()
         self.session: requests.Session = requests.Session()
         self.logger: Logger = PolyLog.get_logger()
+        self.request_timeout_s: tuple[float, float] = (0.75, 2.0)
+
+        # Heartbeat/progress signals for the supervisor.
+        now = time.time()
+        self.last_monitor_tick: float = now
+        self.last_send_attempt: float = 0
+        self.last_send_success: float = 0
 
     def get_clipboard_content(self) -> ClipboardData | None:
         """Get current clipboard content (prefer image)."""
@@ -67,13 +74,21 @@ class ClipboardMonitor:
             try:
                 url = f"http://{peer}:{self.server_port}/clipboard"
                 self.logger.debug("Sending to %s: %s", peer, url)
+                self.last_send_attempt = time.time()
                 response = self.session.post(
-                    url, json=data, headers={"Content-Type": "application/json"}
+                    url,
+                    json=data,
+                    headers={"Content-Type": "application/json"},
+                    timeout=self.request_timeout_s,
                 )
-                if response.status_code == 200:
-                    self.logger.debug("Successfully sent clipboard to %s.", peer)
-                else:
-                    self.logger.warning("Failed to send to %s: %s", peer, response.status_code)
+                try:
+                    if response.status_code == 200:
+                        self.last_send_success = time.time()
+                        self.logger.debug("Successfully sent clipboard to %s.", peer)
+                    else:
+                        self.logger.warning("Failed to send to %s: %s", peer, response.status_code)
+                finally:
+                    response.close()
             except requests.exceptions.RequestException as e:
                 self.logger.warning("Could not reach peer %s: %s", peer, e)
 
@@ -83,6 +98,7 @@ class ClipboardMonitor:
 
         while self.running and not shutdown_event.is_set():
             try:
+                self.last_monitor_tick = time.time()
                 clipboard_data = self.get_clipboard_content()
 
                 if clipboard_data and clipboard_data.hash != self.last_clipboard_hash:

@@ -4,6 +4,7 @@ import socket
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING
 
 import requests
@@ -57,7 +58,9 @@ class PeerDiscoveryManager:
         self.discovery_thread: threading.Thread | None = None
         self.logger: Logger = PolyLog.get_logger()
         self.last_discovery_time: float = 0
-        self.seen_devices: set[str] = set()
+        self.last_discovery_tick: float = time.time()
+        self.last_healthcheck_tick: float = time.time()
+        self.seen_devices: dict[str, str] = {}  # device_id -> last_ip
         self.seen_devices_lock: threading.Lock = threading.Lock()
 
     @staticmethod
@@ -92,17 +95,11 @@ class PeerDiscoveryManager:
 
     def _discover_peers_once(self) -> list[str]:
         """Perform a single peer discovery scan."""
-        discovered_peers = []
-
         if not (network_prefix := self.get_network_prefix(self.interface_ip)):
-            return discovered_peers
+            return []
 
         self.logger.debug("Scanning network %s* for cbsync instances...", network_prefix)
-        self._scan_network_range(
-            network_prefix, self.port, self.timeout, discovered_peers, self.our_device_id
-        )
-
-        return discovered_peers
+        return self._scan_network_range(network_prefix, self.port, self.timeout, self.our_device_id)
 
     def _discovery_loop(self, shutdown_event: threading.Event) -> None:
         """Main discovery loop that runs continuously."""
@@ -123,6 +120,7 @@ class PeerDiscoveryManager:
 
     def _health_check_loop(self) -> None:
         try:
+            self.last_healthcheck_tick = time.time()
             current_time = time.time()
 
             # Perform full discovery scan periodically
@@ -130,6 +128,7 @@ class PeerDiscoveryManager:
                 self.logger.debug("Performing full network discovery scan...")
                 discovered_peers = self._discover_peers_once()
                 self.last_discovery_time = current_time
+                self.last_discovery_tick = time.time()
 
                 # Add only truly new peers
                 with self.peers_lock:
@@ -168,6 +167,7 @@ class PeerDiscoveryManager:
             if peer_count > 0:
                 self.logger.debug("Current peers: %d", peer_count)
 
+            self.last_healthcheck_tick = time.time()
         except Exception as e:
             self.logger.error("Error in peer discovery: %s", e)
 
@@ -189,33 +189,47 @@ class PeerDiscoveryManager:
         return PeerDiscoveryManager._get_preferred_interface(interfaces)
 
     def _scan_network_range(
-        self, network_prefix: str, port: int, timeout: float, peers: list[str], our_device_id: str
-    ) -> None:
+        self, network_prefix: str, port: int, timeout: float, our_device_id: str
+    ) -> list[str]:
         """Scan a network range for cbsync instances."""
-        threads = []
-        for i in range(1, 255):
-            ip = f"{network_prefix}{i}"
-            thread = threading.Thread(
-                target=self._check_host_for_cbsync,
-                args=(ip, port, timeout, peers, our_device_id),
-                daemon=True,
-            )
-            threads.append(thread)
-            thread.start()
+        discovered_ips: list[str] = []
 
-            # Limit concurrent threads
-            if len(threads) >= 50:
-                for t in threads:
-                    t.join(timeout=0.1)
-                threads = []
+        with ThreadPoolExecutor(max_workers=50) as executor:
+            futures = []
+            for i in range(1, 255):
+                ip = f"{network_prefix}{i}"
+                futures.append(
+                    executor.submit(self._check_host_for_cbsync, ip, port, timeout, our_device_id)
+                )
 
-        # Wait for remaining threads
-        for thread in threads:
-            thread.join(timeout=0.1)
+            for future in as_completed(futures):
+                result = future.result()
+                if not result:
+                    continue
+                device_id, ip, hostname = result
+
+                old_ip: str | None = None
+                with self.seen_devices_lock:
+                    old_ip = self.seen_devices.get(device_id)
+                    self.seen_devices[device_id] = ip
+
+                if old_ip and old_ip != ip:
+                    self.logger.info("Peer IP changed for %s: %s -> %s", hostname, old_ip, ip)
+                    with self.peers_lock:
+                        if old_ip in self.peers:
+                            self.peers.remove(old_ip)
+                elif old_ip == ip:
+                    continue
+                else:
+                    self.logger.info("Found peer: %s (%s)", ip, hostname)
+
+                discovered_ips.append(ip)
+
+        return discovered_ips
 
     def _check_host_for_cbsync(
-        self, ip: str, port: int, timeout: float, peers: list[str], our_device_id: str
-    ) -> None:
+        self, ip: str, port: int, timeout: float, our_device_id: str
+    ) -> tuple[str, str, str] | None:
         """Check if a specific IP is running cbsync."""
         try:
             response = requests.get(f"http://{ip}:{port}/discover", timeout=timeout)
@@ -223,26 +237,17 @@ class PeerDiscoveryManager:
                 data = response.json()
                 if data.get("status") == "available":
                     device_id = data.get("device_id", f"{data.get('hostname', 'unknown')}-{ip}")
+                    hostname = data.get("hostname", "unknown")
 
                     # Don't add ourselves to the peer list!
                     if device_id == our_device_id:
                         self.logger.debug("Skipping our own device: %s", device_id)
-                        return
+                        return None
 
-                    # Check if we've seen this device before
-                    with self.seen_devices_lock:
-                        if device_id not in self.seen_devices:
-                            self.seen_devices.add(device_id)
-                            peers.append(ip)
-                            self.logger.info(
-                                "Found peer: %s (%s)", ip, data.get("hostname", "unknown")
-                            )
-                        else:
-                            self.logger.debug(
-                                "Already seen peer: %s (%s)", ip, data.get("hostname", "unknown")
-                            )
+                    return (device_id, ip, hostname)
         except Exception:
-            pass  # Host not reachable or not running cbsync
+            return None  # Host not reachable or not running cbsync
+        return None
 
     def get_network_prefix(self, interface_ip: str | None) -> str | None:
         """Get network prefix from interface IP or auto-detect."""
