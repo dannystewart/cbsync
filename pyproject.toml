@@ -33,4 +33,3 @@ build-backend = "poetry.core.masonry.api"
 
 [project.scripts]
 cbsync = "cbsync.main:main"
-cbsman = "cbsync.cbsync_manager:main"

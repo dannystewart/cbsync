@@ -10,7 +10,7 @@ if (-not (Test-Path $pythonExe)) {
 Set-Location $PSScriptRoot
 
 try {
-    $process = Start-Process -FilePath $pythonExe -ArgumentList @("-m", "cbsync.main", "--supervise") -WindowStyle Hidden -RedirectStandardOutput "$env:TEMP\cbsync.log" -RedirectStandardError "$env:TEMP\cbsync-error.log" -PassThru
+    $process = Start-Process -FilePath $pythonExe -ArgumentList @("-m", "cbsync.main") -WindowStyle Hidden -RedirectStandardOutput "$env:TEMP\cbsync.log" -RedirectStandardError "$env:TEMP\cbsync-error.log" -PassThru
 } catch {
     Write-Host "Failed to start cbsync: $($_.Exception.Message)"
     if (-not $NoPause) { Read-Host "Press Enter to close" }

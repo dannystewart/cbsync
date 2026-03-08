@@ -48,26 +48,3 @@ cbsync --port 9000 --peers 192.168.1.100
 ```bash
 cbsync --interface 192.168.1.100
 ```
-
-## Process Management
-
-For easier process management, you can use the included management script:
-
-```bash
-# Start the application
-cbsman start
-
-# Check status
-cbsman status
-
-# View logs
-cbsman logs
-
-# Stop the application
-cbsman stop
-
-# Restart the application
-cbsman restart
-```
-
-The management script handles graceful shutdown and prevents orphaned processes.

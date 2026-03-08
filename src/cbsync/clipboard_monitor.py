@@ -63,11 +63,6 @@ class ClipboardMonitor:
         self.local_device_id: str = sync_state.local_device_id
         self.last_clipboard_sequence: int | None = get_clipboard_sequence_number()
 
-        # Heartbeat/progress signals for the supervisor.
-        now = time.time()
-        self.last_monitor_tick: float = now
-        self.last_send_attempt: float = 0
-        self.last_send_success: float = 0
 
     def get_clipboard_content(self, *, sequence_changed: bool) -> ClipboardData | None:
         """Get current clipboard content, with extra retries for fresh Windows changes."""
@@ -128,7 +123,6 @@ class ClipboardMonitor:
             try:
                 url = f"http://{peer}:{self.server_port}/clipboard"
                 self.logger.debug("Sending to %s: %s", peer, url)
-                self.last_send_attempt = time.time()
                 response = self.session.post(
                     url,
                     json=data,
@@ -137,7 +131,6 @@ class ClipboardMonitor:
                 )
                 try:
                     if response.status_code == 200:
-                        self.last_send_success = time.time()
                         delivered_peers.add(peer)
                         self.logger.debug(
                             "Delivered clipboard %s to %s.",
@@ -287,10 +280,8 @@ class ClipboardMonitor:
 
         while self.running and not shutdown_event.is_set():
             try:
-                self.last_monitor_tick = time.time()
-                should_probe, sequence_changed = self._should_probe_clipboard(
-                    self.last_monitor_tick
-                )
+                now = time.time()
+                should_probe, sequence_changed = self._should_probe_clipboard(now)
                 if should_probe:
                     clipboard_data = self.get_clipboard_content(sequence_changed=sequence_changed)
                     if clipboard_data:
