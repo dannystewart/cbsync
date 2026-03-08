@@ -28,6 +28,7 @@ from polykit.cli import handle_interrupt
 from cbsync.clipboard_monitor import ClipboardMonitor
 from cbsync.clipboard_server import ClipboardServer
 from cbsync.peer_discovery import PeerDiscoveryManager
+from cbsync.sync_state import ClipboardSyncState
 
 logger = PolyLog.get_logger()
 
@@ -54,6 +55,7 @@ class ClipboardSyncApp:
         self.enable_discovery = enable_discovery
         self.shutdown_event = threading.Event()
         self.started_at = time.time()
+        self.sync_state = ClipboardSyncState(PeerDiscoveryManager.get_device_id())
 
         self.heartbeat_path: Path = heartbeat_path or _default_heartbeat_path(port=self.port)
         self.heartbeat_interval_s: float = max(0.25, heartbeat_interval_s)
@@ -68,7 +70,12 @@ class ClipboardSyncApp:
     def start(self) -> None:
         """Start the application."""
         # Start the server first so other devices can discover us
-        self.server = ClipboardServer(self.port, self.shutdown_event, max_size_mb=self.max_size_mb)
+        self.server = ClipboardServer(
+            self.port,
+            self.shutdown_event,
+            self.sync_state,
+            max_size_mb=self.max_size_mb,
+        )
         self.server.start()
 
         # Give the server a moment to start
@@ -82,7 +89,12 @@ class ClipboardSyncApp:
             self.discovery_manager.start(self.shutdown_event)
 
         # Start clipboard monitoring
-        self.monitor = ClipboardMonitor(self.port, self.discovery_manager, self.max_size_mb)
+        self.monitor = ClipboardMonitor(
+            self.port,
+            self.discovery_manager,
+            self.sync_state,
+            self.max_size_mb,
+        )
         self.monitor.start(self.shutdown_event)
 
         # Start heartbeat last so it can observe component status.

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import contextlib
+import ctypes
 import io
 import platform
 import struct
+import time
+from dataclasses import dataclass
 from typing import Any
 
 import pyperclip
@@ -13,25 +17,50 @@ from cbsync.clipboard_data import ClipboardData
 logger = PolyLog.get_logger()
 
 
+@dataclass(slots=True)
+class ClipboardReadResult:
+    """Result of reading the clipboard."""
+
+    item: ClipboardData | None
+    transient_failure: bool = False
+    source: str | None = None
+    reason: str | None = None
+
+
 def read_preferred(
     *,
     max_size_bytes: int | None = None,
     prefer_image: bool = True,
 ) -> ClipboardData | None:
     """Read the preferred clipboard data (text or image)."""
+    return read_preferred_with_status(
+        max_size_bytes=max_size_bytes,
+        prefer_image=prefer_image,
+    ).item
+
+
+def read_preferred_with_status(
+    *,
+    max_size_bytes: int | None = None,
+    prefer_image: bool = True,
+) -> ClipboardReadResult:
+    """Read the preferred clipboard data and include transient failure details."""
     system = platform.system()
 
     if prefer_image:
         if system == "Darwin":
             item = _mac_read_image(max_size_bytes=max_size_bytes)
-            if item:
-                return item
+            if item is not None:
+                return ClipboardReadResult(item=item, source="image")
         elif system == "Windows":
-            item = _win_read_image(max_size_bytes=max_size_bytes)
-            if item:
-                return item
+            result = _win_read_image(max_size_bytes=max_size_bytes)
+            if result.item is not None or result.transient_failure:
+                return result
 
-    return _read_text(max_size_bytes=max_size_bytes)
+    item = _read_text(max_size_bytes=max_size_bytes)
+    if item is not None:
+        return ClipboardReadResult(item=item, source="text")
+    return ClipboardReadResult(item=None, source="text", reason="empty_clipboard")
 
 
 def write(item: ClipboardData) -> None:
@@ -191,43 +220,118 @@ def _mac_write_image_png(png_bytes: bytes) -> None:
         logger.error("Error writing macOS image clipboard: %s", e)
 
 
-def _win_read_image(*, max_size_bytes: int | None) -> ClipboardData | None:
+def _win_read_image(*, max_size_bytes: int | None) -> ClipboardReadResult:
     try:
         import win32clipboard  # type: ignore
         import win32con  # type: ignore
     except Exception as e:
         logger.debug("Windows image clipboard not available (missing pywin32): %s", e)
-        return None
+        return ClipboardReadResult(
+            item=None,
+            transient_failure=False,
+            source="image",
+            reason="pywin32_unavailable",
+        )
 
+    open_attempts = 4
+    retry_delay_s = 0.03
+
+    for attempt in range(1, open_attempts + 1):
+        if not _win_try_open_clipboard(win32clipboard, attempt=attempt, max_attempts=open_attempts):
+            if attempt < open_attempts:
+                time.sleep(retry_delay_s)
+                continue
+            return _win_image_result(reason="clipboard_busy", transient_failure=True)
+
+        try:
+            result = _win_read_image_once(
+                win32clipboard,
+                win32con,
+                max_size_bytes=max_size_bytes,
+            )
+        except Exception as e:
+            if attempt < open_attempts:
+                time.sleep(retry_delay_s)
+                continue
+            logger.debug("Error reading Windows image clipboard after %d attempts: %s", attempt, e)
+            return _win_image_result(reason="image_read_failed", transient_failure=True)
+        finally:
+            with contextlib.suppress(Exception):
+                win32clipboard.CloseClipboard()
+
+        if result.item is not None or not result.transient_failure or attempt >= open_attempts:
+            return result
+
+        time.sleep(retry_delay_s)
+
+    return _win_image_result(reason="image_read_failed", transient_failure=True)
+
+
+def _win_try_open_clipboard(win32clipboard: Any, *, attempt: int, max_attempts: int) -> bool:
     try:
         win32clipboard.OpenClipboard()
-        try:
-            dib_format = None
-            if win32clipboard.IsClipboardFormatAvailable(getattr(win32con, "CF_DIBV5", 17)):
-                dib_format = getattr(win32con, "CF_DIBV5", 17)
-            elif win32clipboard.IsClipboardFormatAvailable(win32con.CF_DIB):
-                dib_format = win32con.CF_DIB
-
-            if dib_format is None:
-                return None
-
-            dib_bytes = win32clipboard.GetClipboardData(dib_format)
-            if not dib_bytes:
-                return None
-
-            png_bytes, metadata = _dib_bytes_to_png_bytes(bytes(dib_bytes))
-            if not png_bytes:
-                return None
-            if max_size_bytes is not None and len(png_bytes) > max_size_bytes:
-                logger.warning("Clipboard image too large: %s bytes.", len(png_bytes))
-                return None
-
-            return ClipboardData.from_image_png_bytes(png_bytes, metadata=metadata)
-        finally:
-            win32clipboard.CloseClipboard()
+        return True
     except Exception as e:
-        logger.debug("Error reading Windows image clipboard: %s", e)
-        return None
+        if attempt >= max_attempts:
+            logger.debug("Windows clipboard was busy after %d attempts: %s", max_attempts, e)
+        return False
+
+
+def _win_read_image_once(
+    win32clipboard: Any,
+    win32con: Any,
+    *,
+    max_size_bytes: int | None,
+) -> ClipboardReadResult:
+    dib_format = _win_get_image_format(win32clipboard, win32con)
+    if dib_format is None:
+        return _win_image_result(reason="no_image_format")
+
+    dib_bytes = win32clipboard.GetClipboardData(dib_format)
+    if not dib_bytes:
+        logger.debug("Windows clipboard image format was present but empty.")
+        return _win_image_result(reason="empty_image_data", transient_failure=True)
+
+    png_bytes, metadata = _dib_bytes_to_png_bytes(bytes(dib_bytes))
+    if not png_bytes:
+        logger.debug("Windows clipboard image decode did not produce PNG bytes.")
+        return _win_image_result(reason="image_decode_failed", transient_failure=True)
+
+    if max_size_bytes is not None and len(png_bytes) > max_size_bytes:
+        logger.warning("Clipboard image too large: %s bytes.", len(png_bytes))
+        return _win_image_result(reason="image_too_large")
+
+    logger.debug(
+        "Read Windows clipboard image: %s bytes (%sx%s).",
+        len(png_bytes),
+        metadata.get("width", "?"),
+        metadata.get("height", "?"),
+    )
+    return ClipboardReadResult(
+        item=ClipboardData.from_image_png_bytes(png_bytes, metadata=metadata),
+        source="image",
+    )
+
+
+def _win_get_image_format(win32clipboard: Any, win32con: Any) -> int | None:
+    if win32clipboard.IsClipboardFormatAvailable(getattr(win32con, "CF_DIBV5", 17)):
+        return getattr(win32con, "CF_DIBV5", 17)
+    if win32clipboard.IsClipboardFormatAvailable(win32con.CF_DIB):
+        return win32con.CF_DIB
+    return None
+
+
+def _win_image_result(
+    *,
+    reason: str,
+    transient_failure: bool = False,
+) -> ClipboardReadResult:
+    return ClipboardReadResult(
+        item=None,
+        transient_failure=transient_failure,
+        source="image",
+        reason=reason,
+    )
 
 
 def _win_write_image_png(png_bytes: bytes) -> None:
@@ -333,3 +437,18 @@ def _dib_to_bmp_bytes(dib_bytes: bytes) -> bytes:
 
     file_header = struct.pack("<2sIHHI", b"BM", file_size, 0, 0, off_bits)
     return file_header + dib_bytes
+
+
+def get_clipboard_sequence_number() -> int | None:
+    """Return the Windows clipboard sequence number when available."""
+
+    if platform.system() != "Windows":
+        return None
+
+    try:
+        user32 = ctypes.windll.user32
+        sequence = int(user32.GetClipboardSequenceNumber())
+        return sequence if sequence > 0 else None
+    except Exception as e:
+        logger.debug("Clipboard sequence number unavailable: %s", e)
+        return None

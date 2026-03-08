@@ -17,16 +17,24 @@ from cbsync.peer_discovery import PeerDiscoveryManager
 if TYPE_CHECKING:
     from logging import Logger
 
+    from cbsync.sync_state import ClipboardSyncState
+
 
 class ClipboardServer:
     """Flask server to receive clipboard updates from other devices."""
 
-    def __init__(self, port: int, shutdown_event: threading.Event, max_size_mb: int = 10):
+    def __init__(
+        self,
+        port: int,
+        shutdown_event: threading.Event,
+        sync_state: ClipboardSyncState,
+        max_size_mb: int = 10,
+    ):
         self.port: int = port
         self.shutdown_event: threading.Event = shutdown_event
+        self.sync_state = sync_state
         self.max_size_bytes: int = max_size_mb * 1024 * 1024
         self.app: Flask = Flask(__name__)
-        self.last_received_hash: str | None = None
         self.update_lock: threading.Lock = threading.Lock()
         self.server_thread: threading.Thread | None = None
         self.logger: Logger = PolyLog.get_logger()
@@ -61,35 +69,64 @@ class ClipboardServer:
 
     def _process_clipboard_update(self, clipboard_data: ClipboardData, remote_addr: str) -> None:
         """Process a clipboard update with deduplication logic."""
-        with self.update_lock:
-            if clipboard_data.hash != self.last_received_hash:
-                if clipboard_data.size_bytes > self.max_size_bytes:
-                    self.logger.warning(
-                        "Ignoring oversized clipboard update from %s (%s): %s bytes.",
-                        remote_addr,
-                        clipboard_data.kind,
-                        clipboard_data.size_bytes,
-                    )
-                    self.last_received_hash = clipboard_data.hash
-                    return
+        message_id = clipboard_data.metadata.get("message_id")
+        origin_device_id = clipboard_data.metadata.get("origin_device_id")
+        sender_device_id = clipboard_data.metadata.get("sender_device_id")
+        skip_reason = self.sync_state.inspect_incoming_message(
+            message_id=message_id,
+            origin_device_id=origin_device_id,
+            sender_device_id=sender_device_id,
+        )
 
-                if clipboard_data.is_different_from_current_clipboard(
-                    max_size_bytes=self.max_size_bytes
-                ):
-                    self._set_clipboard(clipboard_data)
-                    self.last_received_hash = clipboard_data.hash
-                    self.logger.info(
-                        "Clipboard updated from %s (%s): %s bytes.",
-                        remote_addr,
-                        clipboard_data.kind,
-                        clipboard_data.size_bytes,
-                    )
-                else:
-                    self.logger.debug("Ignoring update; content is already in clipboard.")
-                    # Still update the hash to avoid repeated checks
-                    self.last_received_hash = clipboard_data.hash
+        if skip_reason == "originated_locally":
+            self.logger.info(
+                "Ignoring echoed clipboard %s from %s because it originated locally.",
+                clipboard_data.hash,
+                sender_device_id or remote_addr,
+            )
+            return
+
+        if skip_reason == "duplicate_message_id":
+            self.logger.debug(
+                "Ignoring duplicate clipboard message %s from %s.",
+                message_id,
+                sender_device_id or remote_addr,
+            )
+            return
+
+        with self.update_lock:
+            if clipboard_data.size_bytes > self.max_size_bytes:
+                self.logger.warning(
+                    "Ignoring oversized clipboard update from %s (%s): %s bytes.",
+                    remote_addr,
+                    clipboard_data.kind,
+                    clipboard_data.size_bytes,
+                )
+                return
+
+            if clipboard_data.is_different_from_current_clipboard(
+                max_size_bytes=self.max_size_bytes
+            ):
+                self.sync_state.remember_remote_clipboard(
+                    content_hash=clipboard_data.hash,
+                    origin_device_id=origin_device_id,
+                    message_id=message_id,
+                    sender_device_id=sender_device_id,
+                )
+                try:
+                    write(clipboard_data)
+                except Exception:
+                    self.sync_state.forget_local_suppression(clipboard_data.hash)
+                    raise
+
+                self.logger.info(
+                    "Clipboard updated from %s (%s): %s bytes.",
+                    remote_addr,
+                    clipboard_data.kind,
+                    clipboard_data.size_bytes,
+                )
             else:
-                self.logger.debug("Ignoring duplicate clipboard update")
+                self.logger.debug("Ignoring update; content is already in clipboard.")
 
     def _handle_health_check(self) -> tuple[Response, int]:
         """Handle health check requests."""
@@ -119,13 +156,6 @@ class ClipboardServer:
         shutdown_thread = threading.Thread(target=shutdown_server_internal, daemon=True)
         shutdown_thread.start()
         return jsonify({"status": "shutting down"}), 200
-
-    def _set_clipboard(self, clipboard_data: ClipboardData) -> None:
-        """Set the local clipboard content."""
-        try:  # Use the raw content to preserve original formatting
-            write(clipboard_data)
-        except Exception as e:
-            self.logger.error("Error setting clipboard: %s", e)
 
     def run(self) -> None:
         """Start the Flask server."""
