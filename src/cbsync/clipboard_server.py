@@ -79,7 +79,7 @@ class ClipboardServer:
         )
 
         if skip_reason == "originated_locally":
-            self.logger.info(
+            self.logger.debug(
                 "Ignoring echoed clipboard %s from %s because it originated locally.",
                 clipboard_data.hash,
                 sender_device_id or remote_addr,

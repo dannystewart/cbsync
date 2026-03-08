@@ -87,7 +87,7 @@ class ClipboardMonitor:
 
             if result.item:
                 if attempt > 1:
-                    self.logger.info(
+                    self.logger.debug(
                         "Recovered clipboard read on retry %d for sequence change %s.",
                         attempt,
                         self.last_clipboard_sequence,
@@ -117,7 +117,7 @@ class ClipboardMonitor:
             self.logger.debug("No peers available to send clipboard update")
             return ClipboardSendResult([], delivered_peers, failed_peers)
 
-        self.logger.info(
+        self.logger.debug(
             "Sending clipboard update to %d peer%s: %s",
             len(target_peers),
             "s" if len(target_peers) > 1 else "",
@@ -139,7 +139,7 @@ class ClipboardMonitor:
                     if response.status_code == 200:
                         self.last_send_success = time.time()
                         delivered_peers.add(peer)
-                        self.logger.info(
+                        self.logger.debug(
                             "Delivered clipboard %s to %s.",
                             clipboard_data.hash,
                             peer,
@@ -169,7 +169,7 @@ class ClipboardMonitor:
         self.pending_succeeded_peers = set()
         self.pending_attempt_count = 0
         self.pending_retry_at = 0
-        self.logger.info(
+        self.logger.debug(
             "Queued local clipboard %s (%s, %s bytes) for sync.",
             clipboard_data.hash,
             clipboard_data.kind,
@@ -189,7 +189,7 @@ class ClipboardMonitor:
         self.pending_attempt_count += 1
         retry_delay_s = min(5.0, 0.5 * (2 ** max(0, self.pending_attempt_count - 1)))
         self.pending_retry_at = time.time() + retry_delay_s
-        self.logger.info(
+        self.logger.debug(
             "Will retry clipboard %s in %.2fs after incomplete delivery.",
             self.pending_clipboard_hash,
             retry_delay_s,
@@ -251,7 +251,7 @@ class ClipboardMonitor:
                     )
                     self._mark_clipboard_handled(clipboard_data.hash)
                 else:
-                    self.logger.info(
+                    self.logger.debug(
                         "Clipboard %s has no reachable peers yet; keeping it pending.",
                         clipboard_data.hash,
                     )
