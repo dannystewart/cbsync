@@ -221,7 +221,7 @@ class ClipboardMonitor:
         with self.update_lock:
             suppression = self.sync_state.consume_local_suppression(clipboard_data.hash)
             if suppression is not None:
-                self.logger.info(
+                self.logger.debug(
                     "Suppressing rebroadcast of remote clipboard %s from %s.",
                     clipboard_data.hash,
                     suppression.sender_device_id or "unknown",
