@@ -120,9 +120,9 @@ class ClipboardServer:
                     raise
 
                 self.logger.info(
-                    "Clipboard updated from %s (%s): %s bytes.",
+                    "%s received from %s (%s bytes).",
+                    clipboard_data.kind.capitalize(),
                     remote_addr,
-                    clipboard_data.kind,
                     clipboard_data.size_bytes,
                 )
             else:

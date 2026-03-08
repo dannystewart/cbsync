@@ -264,7 +264,7 @@ class ClipboardMonitor:
 
             if not result.failed_peers and result.attempted_count > 0:
                 self.logger.info(
-                    "Clipboard %s delivered to all targeted peers.",
+                    "Item %s delivered to peers.",
                     clipboard_data.hash,
                 )
                 self._mark_clipboard_handled(clipboard_data.hash)
@@ -273,7 +273,7 @@ class ClipboardMonitor:
             remaining_peers = self._current_unsent_peers()
             if not remaining_peers and self.pending_succeeded_peers:
                 self.logger.info(
-                    "Clipboard %s delivered to all known peers after retry tracking.",
+                    "Item %s delivered to peers after retry tracking.",
                     clipboard_data.hash,
                 )
                 self._mark_clipboard_handled(clipboard_data.hash)
