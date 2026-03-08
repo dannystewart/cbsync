@@ -219,6 +219,7 @@ class ClipboardMonitor:
 
     def _process_clipboard_item(self, clipboard_data: ClipboardData) -> None:
         with self.update_lock:
+            now = time.time()
             suppression = self.sync_state.consume_local_suppression(clipboard_data.hash)
             if suppression is not None:
                 self.logger.debug(
@@ -240,6 +241,9 @@ class ClipboardMonitor:
 
             target_peers = self._current_unsent_peers()
             if not target_peers:
+                if self.pending_retry_at and now < self.pending_retry_at:
+                    return
+
                 if self.pending_succeeded_peers:
                     self.logger.info(
                         "Clipboard %s reached all currently known peers.",

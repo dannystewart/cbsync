@@ -76,6 +76,27 @@ class ClipboardReliabilityTests(unittest.TestCase):
         self.assertEqual(monitor.last_handled_hash, item.hash)
         self.assertIsNone(monitor.pending_clipboard_hash)
 
+    def test_pending_clipboard_does_not_reschedule_before_retry_deadline(self) -> None:
+        sync_state = ClipboardSyncState("local-device")
+        monitor = ClipboardMonitor(8765, FakeDiscoveryManager([]), sync_state)
+        item = ClipboardData.from_text("wait quietly")
+
+        with mock.patch("cbsync.clipboard_monitor.time.time", return_value=100.0):
+            getattr(monitor, "_process_clipboard_item")(item)
+
+        self.assertEqual(monitor.pending_attempt_count, 1)
+        first_retry_at = monitor.pending_retry_at
+
+        with (
+            mock.patch("cbsync.clipboard_monitor.time.time", return_value=100.1),
+            mock.patch.object(monitor, "_schedule_retry") as schedule_retry_mock,
+        ):
+            getattr(monitor, "_process_clipboard_item")(item)
+
+        schedule_retry_mock.assert_not_called()
+        self.assertEqual(monitor.pending_attempt_count, 1)
+        self.assertEqual(monitor.pending_retry_at, first_retry_at)
+
     def test_windows_sequence_change_retries_transient_clipboard_read(self) -> None:
         sync_state = ClipboardSyncState("local-device")
         monitor = ClipboardMonitor(8765, FakeDiscoveryManager([]), sync_state)
