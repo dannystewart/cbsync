@@ -29,7 +29,7 @@ class ClipboardSyncApp:
     def __init__(
         self,
         port: int = 8765,
-        max_size_mb: int = 10,
+        max_size_mb: int = 20,
         interface_ip: str | None = None,
         discovery_interval: int = 10,
         health_check_interval: int = 10,
